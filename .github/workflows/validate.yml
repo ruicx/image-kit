@@ -1,0 +1,33 @@
+name: Validate capabilities
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out component
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install shell validation tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck shfmt
+
+      - name: Validate shell capabilities
+        shell: bash
+        run: |
+          mapfile -t shell_files < <(git ls-files '*.sh')
+          for script in "${shell_files[@]}"; do
+            bash -n "$script"
+          done
+          shellcheck "${shell_files[@]}"
+          shfmt -d -i 4 -ci "${shell_files[@]}"
+          bash tests/install-arguments.sh
+          bash tests/ascend-pip-check.sh
