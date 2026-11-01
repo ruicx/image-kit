@@ -118,4 +118,4 @@ followed by a colon and summary; the body is a numbered list after a blank line.
 
 ## System capability options
 
-`system.sh --timezone <zone> --upgrade <true|false>` configures the OS. Upgrading defaults to `false`; consumers opt in explicitly. Case-insensitive `true`/`false` values are accepted. `dev-tools.sh` includes `gosu` as a shared container user-switching utility; Landscape tools remain a consumer choice.
+`system.sh --timezone <zone> --upgrade <true|false>` configures the OS. Upgrading defaults to `false`; consumers opt in explicitly. Case-insensitive `true`/`false` values are accepted. `dev-tools.sh` includes `gosu` and `sudo` as shared user-switching and privilege tools; Landscape tools remain a consumer choice.

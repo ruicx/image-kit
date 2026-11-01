@@ -69,8 +69,8 @@ TEST_TIMEZONE="$1"; shift
         assert (tmp_path / "timezone").read_text(encoding="utf-8") == "UTC\n"
 
 
-def test_shared_gosu(bash: str) -> None:
-    """Include gosu in the common package installation transaction.
+def test_shared_privilege_tools(bash: str) -> None:
+    """Include gosu and sudo in the common package installation transaction.
 
     Parameters
     ----------
@@ -94,4 +94,5 @@ command() { if [ "$1" = -v ]; then printf '/usr/bin/%s' "$2"; else return 1; fi;
     )
     assert result.returncode == 0, result.stderr
     assert "\ngosu\n" in result.stdout
+    assert "\nsudo\n" in result.stdout
     assert "landscape-common" not in result.stdout

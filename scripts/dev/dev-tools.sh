@@ -76,6 +76,7 @@ DEBIAN_FRONTEND=noninteractive apt-get -y install --no-install-recommends \
     ripgrep \
     rsync \
     screen \
+    sudo \
     systemd-coredump \
     tmux \
     trash-cli \

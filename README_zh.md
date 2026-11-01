@@ -109,4 +109,4 @@ Agent 与维护者请先阅读 [AGENTS.md](AGENTS.md)，了解组件职责、uv/
 
 ## 系统能力参数
 
-`system.sh --timezone <zone> --upgrade <true|false>` 配置系统，升级默认为 `false`，由消费仓库显式启用。`true`/`false` 不区分大小写。`dev-tools.sh` 提供通用容器用户切换工具 `gosu`；Landscape 工具由消费仓库自行选择。
+`system.sh --timezone <zone> --upgrade <true|false>` 配置系统，升级默认为 `false`，由消费仓库显式启用。`true`/`false` 不区分大小写。`dev-tools.sh` 提供通用用户切换及权限工具 `gosu` 和 `sudo`；Landscape 工具由消费仓库自行选择。
