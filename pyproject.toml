@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools==84.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "image-kit"
+version = "0.1.0"
+description = "Manifest-driven container validation, planning, and Buildx Bake tooling"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = ["jsonschema==4.26.0", "PyYAML==6.0.3"]
+
+[project.optional-dependencies]
+dev = [
+  "pytest==8.4.2",
+  "ruff==0.16.8",
+  "ty==0.0.95",
+  "types-PyYAML==6.0.12.20260906",
+]
+
+[project.scripts]
+images = "image_kit.cli:main"
+image-kit = "image_kit.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["image_kit*"]
+
+[tool.setuptools.package-data]
+image_kit = ["schemas/*.json", "py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-p no:cacheprovider"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

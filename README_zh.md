@@ -1,6 +1,6 @@
 # image-kit
 
-为独立维护的镜像仓库提供共享安装能力与容器资源。
+为独立镜像仓库提供清单驱动的容器构建工具、共享安装能力与资源。
 
 English documentation: [README.md](README.md)
 
@@ -8,16 +8,53 @@ English documentation: [README.md](README.md)
 
 | 路径 | 职责 |
 | --- | --- |
+| `src/image_kit/` | 清单校验、依赖图、变更规划、Bake 生成、测试执行和注册表操作。 |
+| `src/image_kit/schemas/` | 随 Python 包分发的版本化清单 schema。 |
 | `scripts/system/` | 系统配置、用户、SSH、工作目录和软件源。 |
 | `scripts/dev/` | 构建工具、编译器、开发 shell 和 pre-commit。 |
 | `scripts/python/` | Python 配置及彼此独立的 CUDA/Ascend 软件包安装器。 |
 | `scripts/libraries/` | 第三方 C++ 库。 |
 | `scripts/integrations/` | Ascend、ROS 2、llama.cpp 和 WSLg 集成。 |
 | `assets/` | 入口脚本、公共 Python 开发依赖和配置。 |
-| `tests/` | 不执行安装的参数检查与 Ascend 依赖检查回归测试。 |
+| `tests/` | Python 引擎测试、不执行安装的参数检查及依赖检查回归测试。 |
 
-镜像清单、Dockerfile、镜像专用依赖、冒烟测试、构建规划器、schema 和发布策略由消费仓库
-维护。此次初始抽取保留 ruicx/images 现有能力行为，尚未合并 Luciole 的专有差异。
+镜像清单、Dockerfile、镜像专用依赖、冒烟脚本、账号/文档检查、工作流权限和发布策略由消费
+仓库维护。Python 包无需父 images 仓库或本地 `schemas/` 目录即可运行。当前支持
+family/variant v1 契约，每个镜像族使用一个原生平台；其他现有格式（包括 Luciole 的清单）
+需要先显式迁移，再接入引擎。
+
+## 安装与运行
+
+要求 uv、Python 3.11+、Git；镜像操作还需 Docker Buildx。目前未发布到 PyPI，从 image-kit
+工作副本运行：
+
+```bash
+uv sync --locked --extra dev
+uv run images --root /path/to/image-repository validate
+uv run images --root /path/to/image-repository plan --all --output build-plan.json
+```
+
+`uv run image-kit` 和 `uv run python -m image_kit` 与 `uv run images` 使用同一 CLI。清单位于选定消费仓库根目录
+下的 `src/<family>/image.yml`。参见[清单参考](docs/manifest-reference_zh.md)和
+[CLI 参考](docs/cli-reference_zh.md)。校验覆盖构建契约、路径和 DAG，消费端文档与账号策略
+单独检查。可选的 `mirror` 和 `runtime` 配置用于集成共享脚本，其他镜像可以同时省略二者。
+
+消费端默认值在自己的 `pyproject.toml` 中声明，例如：
+
+```toml
+[tool.image-kit]
+registry = "ghcr.io"
+cache = "gha"
+rebuild-inputs = [".gitmodules", "vendor/image-kit", "tools/**"]
+shell-inputs = ["vendor/image-kit/tests/*.sh"]
+```
+
+注册表默认为 `ghcr.io`，相关命令可通过 `--registry` 覆盖。GitHub Actions 以外的环境省略
+`cache`。`.dockerignore`、`pyproject.toml`、`uv.lock` 和 `.github/workflows/**` 始终触发重建；
+`rebuild-inputs` 添加消费端路径。shell 校验覆盖清单输入、冒烟脚本及 `shell-inputs`。
+组件不假定特定子模块路径。uv 消费端声明 `image-kit` 依赖，并在 `[tool.uv.sources]` 中配置
+可编辑路径，再运行 `uv sync`。本项目与消费仓库分别保留自己的 `uv.lock`；CI 使用
+`uv sync --locked`，Python 类型检查统一使用 ty。
 
 ## 消费固定版本组件
 
@@ -47,6 +84,11 @@ RUN /tmp/scripts/cmake.sh --version "${CMAKE_VERSION}" --sha256 "${CMAKE_SHA256}
 在 Linux 或 Git Bash 中运行：
 
 ```bash
+uv sync --locked --extra dev
+uv run --no-sync pytest
+uv run --no-sync ruff check .
+uv run --no-sync ruff format --check .
+uv run --no-sync ty check
 bash tests/install-arguments.sh
 bash tests/ascend-pip-check.sh
 mapfile -t shell_files < <(git ls-files '*.sh')
@@ -54,10 +96,13 @@ shellcheck "${shell_files[@]}"
 shfmt -d -i 4 -ci "${shell_files[@]}"
 ```
 
-这些检查不安装软件，也不构建镜像。消费仓库还需执行自己的清单校验、原生镜像构建和冒烟
+这些测试不安装容器软件，也不构建镜像。消费仓库还需执行自己的清单校验、原生镜像构建和冒烟
 测试。抽取过程中保留能力行为，不兼容修改需单独审阅。
 
 ## 贡献
+
+Agent 与维护者请先阅读 [AGENTS.md](AGENTS.md)，了解组件职责、uv/ty 检查、兼容性要求及
+消费仓库的职责边界。
 
 脚本按能力分类，注释使用英文，保留显式参数校验，两个 README 同步更新。提交标题使用
 `Feat`、`BugFix`、`Refactor` 或 `Doc`，后接冒号和摘要；空行后以编号列表描述修改。

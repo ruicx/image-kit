@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ruicx/image-kit/blob/main/src/image_kit/schemas/image.schema.json",
+  "title": "Container image family",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "name",
+    "description",
+    "dockerfile",
+    "context",
+    "platforms",
+    "inputs",
+    "publish",
+    "variants"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "name": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+    "description": { "type": "string", "minLength": 1 },
+    "dockerfile": { "type": "string", "minLength": 1 },
+    "context": { "type": "string", "minLength": 1 },
+    "platforms": {
+      "type": "array",
+      "enum": [["linux/amd64"], ["linux/arm64"]]
+    },
+    "inputs": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "publish": { "type": "boolean" },
+    "variants": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/variant" }
+    }
+  },
+  "$defs": {
+    "variant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "base", "build_args", "dependencies", "tests"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:[._-][a-z0-9]+)*$",
+          "not": { "const": "latest" }
+        },
+        "base": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["image", "digest"],
+          "properties": {
+            "image": {
+              "type": "string",
+              "minLength": 1,
+              "not": { "pattern": "(?:^|:)latest$|:master$" }
+            },
+            "digest": {
+              "type": ["string", "null"],
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            }
+          }
+        },
+        "build_args": {
+          "type": "object",
+          "additionalProperties": { "type": ["string", "number", "boolean"] }
+        },
+        "mirror": { "enum": ["upstream", "aliyun"] },
+        "runtime": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ssh"],
+          "properties": {
+            "ssh": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["mode"],
+              "properties": {
+                "mode": { "enum": ["disabled", "key-only", "password"] }
+              }
+            }
+          }
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["context", "family", "variant"],
+            "properties": {
+              "context": { "type": "string", "pattern": "^[a-z][a-z0-9_-]*$" },
+              "family": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+              "variant": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "tests": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

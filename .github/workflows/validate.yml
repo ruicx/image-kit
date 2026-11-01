@@ -1,4 +1,4 @@
-name: Validate capabilities
+name: Validate image-kit
 
 on:
   push:
@@ -9,6 +9,35 @@ permissions:
   contents: read
 
 jobs:
+  python:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - name: Check out component
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Python
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.0"
+
+      - name: Install locked build tooling
+        run: uv sync --locked --extra dev --no-editable --python "${{ matrix.python-version }}"
+
+      - name: Validate Python tooling and bundled schema
+        run: |
+          uv run --no-sync ruff check .
+          uv run --no-sync ruff format --check .
+          uv run --no-sync ty check
+          uv run --no-sync pytest
+
   validate:
     runs-on: ubuntu-24.04
     steps:
