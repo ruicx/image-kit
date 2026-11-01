@@ -84,8 +84,7 @@ it as `PACKAGE_MIRROR`. The Dockerfile passes that value to its final mirror cap
 owns the supported values: `upstream` leaves the base sources unchanged, while `aliyun` rewrites the
 persisted apt and pip configuration after all package installation. No runtime mirror probe occurs.
 
-`runtime.ssh.mode` is a typed runtime policy rather than a free-form build argument. Every variant
-must select it explicitly, so a new variant cannot silently inherit password authentication. The
+`runtime.ssh.mode` is a typed runtime policy rather than a free-form build argument. Consumers can require it explicitly as a policy. The
 planner renders it as the internal `SSH_MODE` build argument. The Dockerfile and entrypoint derive
 the only permitted SSH account from `DEFAULT_USER`; there is no separate login-user selector.
 
@@ -132,10 +131,7 @@ base:
 ```
 
 The JSON Schema performs structural validation. `images validate` additionally checks paths,
-directory/name equality, duplicate variants, secret-like build arguments, the `DEFAULT_USER`
-contract, dependency targets, duplicate context names, smoke tests, graph cycles, and bilingual
-documentation. `DEFAULT_USER=root` must omit `DEFAULT_UID` and `DEFAULT_GID`; any other valid Linux
-username requires both numeric fields.
+directory/name equality, duplicate variants, secret-like build arguments, dependency targets, duplicate context names, smoke tests, and graph cycles. Account and bilingual documentation policies are checked by the consumer.
 
 ## Package and consumer policy
 

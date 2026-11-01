@@ -35,8 +35,8 @@ uv run images --root /path/to/image-repository plan --all --output build-plan.js
 ```
 
 `uv run image-kit` 和 `uv run python -m image_kit` 与 `uv run images` 使用同一 CLI。清单位于选定消费仓库根目录
-下的 `src/<family>/image.yml`。参见[清单参考](docs/manifest-reference_zh.md)和
-[CLI 参考](docs/cli-reference_zh.md)。校验覆盖构建契约、路径和 DAG，消费端文档与账号策略
+下的 `src/<family>/image.yml`。参见[清单参考](docs/manifest-reference.md)和
+[CLI 参考](docs/cli-reference.md)。校验覆盖构建契约、路径和 DAG，消费端文档与账号策略
 单独检查。可选的 `mirror` 和 `runtime` 配置用于集成共享脚本，其他镜像可以同时省略二者。
 
 消费端默认值在自己的 `pyproject.toml` 中声明，例如：

@@ -11,7 +11,7 @@ of any particular consumer repository, GitHub owner, registry, or submodule chec
   `importlib.resources`; never require a consumer-local `schemas/` directory.
 - `scripts/` and `assets/` own reusable installation capabilities and container resources.
 - `tests/` owns Python engine tests and shell capability tests.
-- `docs/` owns the shared CLI and manifest contracts. Keep paired English and Chinese files aligned.
+- `docs/` owns the shared CLI and manifest contracts. Write these documents in English.
 
 Consumers own image manifests, Dockerfiles, software selections, image smoke scripts, workflow
 permissions, account/documentation policies, and release decisions. Do not hardcode consumer
@@ -78,7 +78,7 @@ establish that images build or run; report native image builds and hardware chec
 ## Documentation and commits
 
 Update `README.md` and `README_zh.md` together. Shared CLI and schema changes also update the
-corresponding bilingual guides under `docs/`. Keep consumer-specific instructions in consumer
+corresponding English guides under `docs/`. Keep consumer-specific instructions in consumer
 repositories.
 
 Use commit subjects `<Type>: <summary>`, where Type is `Feat`, `BugFix`, `Refactor`, or `Doc`.
