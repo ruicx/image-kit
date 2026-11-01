@@ -2,22 +2,24 @@
 # Minimal system bootstrap: package metadata, timezone, and locale.
 # Developer CLI tools are installed separately by dev-tools.sh, and GUI / WSLg
 # deps by wslg.sh, to keep each layer's cache independent.
-# Options: --timezone (default: Asia/Shanghai).
+# Options: --timezone (default: Asia/Shanghai), --upgrade (default: false).
 set -euo pipefail
 
 usage() {
     cat <<'EOF'
-Usage: system.sh [--timezone <IANA timezone>]
+Usage: system.sh [--timezone <IANA timezone>] [--upgrade <true|false>]
 
 Options:
   --timezone <value>  Container timezone (default: Asia/Shanghai)
+  --upgrade <value>   Upgrade installed packages (default: false)
   -h, --help          Show this help
 EOF
 }
 
 TZ_VAL="Asia/Shanghai"
+UPGRADE_VAL="false"
 
-if ! PARSED=$(getopt -o h -l help,timezone: -n "$(basename "$0")" -- "$@"); then
+if ! PARSED=$(getopt -o h -l help,timezone:,upgrade: -n "$(basename "$0")" -- "$@"); then
     usage >&2
     exit 64
 fi
@@ -26,6 +28,10 @@ while true; do
     case "$1" in
         --timezone)
             TZ_VAL="$2"
+            shift 2
+            ;;
+        --upgrade)
+            UPGRADE_VAL="$2"
             shift 2
             ;;
         -h | --help)
@@ -47,6 +53,13 @@ if [[ ! "${TZ_VAL}" =~ ^[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)+$ && "${TZ_VAL}" != "U
     echo "system.sh: invalid timezone name '${TZ_VAL}'" >&2
     exit 64
 fi
+case "${UPGRADE_VAL,,}" in
+    true | false) UPGRADE_VAL="${UPGRADE_VAL,,}" ;;
+    *)
+        echo "system.sh: upgrade must be true or false" >&2
+        exit 64
+        ;;
+esac
 
 case "$(uname -m)" in
     x86_64 | aarch64) ;;
@@ -59,6 +72,9 @@ esac
 chmod 777 /tmp
 
 apt-get update
+if [ "${UPGRADE_VAL}" = "true" ]; then
+    DEBIAN_FRONTEND=noninteractive apt-get -y upgrade
+fi
 DEBIAN_FRONTEND=noninteractive apt-get -y install --no-install-recommends \
     ca-certificates tzdata lsb-release wget software-properties-common gnupg locales
 

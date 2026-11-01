@@ -115,3 +115,7 @@ compatibility requirements, and consumer boundaries.
 Keep scripts grouped by capability, use English comments, retain explicit argument validation,
 and update both READMEs together. Commit subjects use `Feat`, `BugFix`, `Refactor`, or `Doc`,
 followed by a colon and summary; the body is a numbered list after a blank line.
+
+## System capability options
+
+`system.sh --timezone <zone> --upgrade <true|false>` configures the OS. Upgrading defaults to `false`; consumers opt in explicitly. Case-insensitive `true`/`false` values are accepted. `dev-tools.sh` includes `gosu` as a shared container user-switching utility; Landscape tools remain a consumer choice.

@@ -106,3 +106,7 @@ Agent 与维护者请先阅读 [AGENTS.md](AGENTS.md)，了解组件职责、uv/
 
 脚本按能力分类，注释使用英文，保留显式参数校验，两个 README 同步更新。提交标题使用
 `Feat`、`BugFix`、`Refactor` 或 `Doc`，后接冒号和摘要；空行后以编号列表描述修改。
+
+## 系统能力参数
+
+`system.sh --timezone <zone> --upgrade <true|false>` 配置系统，升级默认为 `false`，由消费仓库显式启用。`true`/`false` 不区分大小写。`dev-tools.sh` 提供通用容器用户切换工具 `gosu`；Landscape 工具由消费仓库自行选择。

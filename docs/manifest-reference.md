@@ -141,3 +141,5 @@ Omitting them injects neither `PACKAGE_MIRROR` nor `SSH_MODE`. Image-specific ac
 required runtime settings, bilingual documentation, and publication permissions belong to each
 consumer. This version supports the family/variant v1 contract and one native platform per family;
 it does not automatically interpret other manifest formats.
+
+The system capability accepts explicit `--timezone` and `--upgrade <true|false>` options. Upgrade defaults to false; consumers may pass a build argument to opt in without changing the component default.

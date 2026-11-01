@@ -61,6 +61,11 @@ ssh_script="${REPOSITORY_ROOT}/scripts/system/ssh.sh"
 expect_usage_error "${ssh_script}" --login-user default
 expect_usage_error "${ssh_script}" --mode
 
+# System upgrades are opt-in and malformed values fail before any package changes.
+system_script="${REPOSITORY_ROOT}/scripts/system/system.sh"
+expect_usage_error "${system_script}" --upgrade
+expect_usage_error "${system_script}" --upgrade sometimes
+
 # New architecture support must not relax configuration validation before installation begins.
 expect_usage_error "${REPOSITORY_ROOT}/scripts/dev/cmake.sh" --sha256
 expect_usage_error "${REPOSITORY_ROOT}/scripts/dev/cmake.sh" --sha256 invalid
