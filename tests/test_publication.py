@@ -53,12 +53,15 @@ class Registry:
             Content digest.
         """
         digest = (
-            "sha256:" + hashlib.sha256(json.dumps(document, sort_keys=True).encode()).hexdigest()
+            "sha256:"
+            + hashlib.sha256(json.dumps(document, sort_keys=True).encode()).hexdigest()
         )
         self.documents[digest] = document
         return digest
 
-    def run(self, command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+    def run(
+        self, command: list[str], **kwargs: Any
+    ) -> subprocess.CompletedProcess[str]:
         """Simulate inspect, dry-run index composition and tag creation.
 
         Parameters
@@ -84,12 +87,17 @@ class Registry:
             digest = self.tags.get(reference, reference.split("@")[-1])
             if self.error or digest not in self.documents:
                 return subprocess.CompletedProcess(
-                    command, 1, stdout="", stderr=self.error or f"ERROR: {reference}: not found"
+                    command,
+                    1,
+                    stdout="",
+                    stderr=self.error or f"ERROR: {reference}: not found",
                 )
             return subprocess.CompletedProcess(
                 command,
                 0,
-                stdout=json.dumps({**self.documents[digest], "digest": digest, "size": 1}),
+                stdout=json.dumps(
+                    {**self.documents[digest], "digest": digest, "size": 1}
+                ),
                 stderr="",
             )
         dry = "--dry-run" in command
@@ -105,7 +113,9 @@ class Registry:
                 "manifests": members,
             }
         if dry:
-            return subprocess.CompletedProcess(command, 0, stdout=json.dumps(document), stderr="")
+            return subprocess.CompletedProcess(
+                command, 0, stdout=json.dumps(document), stderr=""
+            )
         destination = command[5]
         if destination == self.fail_tag:
             raise subprocess.CalledProcessError(1, command)
@@ -122,7 +132,9 @@ def identity() -> BuildIdentity:
     BuildIdentity
         Main build identity.
     """
-    return BuildIdentity("registry.example:5000", "example", "example/images", "a" * 40, "123-2")
+    return BuildIdentity(
+        "registry.example:5000", "example", "example/images", "a" * 40, "123-2"
+    )
 
 
 @pytest.fixture
@@ -209,7 +221,9 @@ def artifacts(
                     "mediaType": "application/vnd.oci.image.manifest.v1+json",
                     "size": 1,
                     "platform": {"os": "unknown", "architecture": "unknown"},
-                    "annotations": {"vnd.docker.reference.type": "attestation-manifest"},
+                    "annotations": {
+                        "vnd.docker.reference.type": "attestation-manifest"
+                    },
                 },
             ],
         }
@@ -273,7 +287,15 @@ def test_merge_preserves_provenance_and_is_idempotent(
 
 @pytest.mark.parametrize(
     "damage",
-    ["missing", "duplicate", "revision", "registry", "build_id", "unexpected", "invalid_digest"],
+    [
+        "missing",
+        "duplicate",
+        "revision",
+        "registry",
+        "build_id",
+        "unexpected",
+        "invalid_digest",
+    ],
 )
 def test_artifact_damage_prevents_all_mutations(
     registry: Registry, plan: dict[str, Any], identity: BuildIdentity, damage: str
@@ -367,9 +389,9 @@ def test_immutable_conflict_prevents_alias_updates(
         Shared identity.
     """
     data = artifacts(registry, plan, identity)
-    registry.tags[identity.image("demo", "stack-aaaaaaaaaaaa-123-2")] = data[0]["digests"][0][
-        "digest"
-    ]
+    registry.tags[identity.image("demo", "stack-aaaaaaaaaaaa-123-2")] = data[0][
+        "digests"
+    ][0]["digest"]
     with pytest.raises(RepositoryError, match="immutable tag conflict"):
         merge(plan, data, identity, "refs/heads/main")
     assert not mutations(registry)
@@ -435,20 +457,34 @@ def test_release_promotes_verified_digest_without_building(
     identity:
         Shared identity.
     """
-    receipt = merge(plan, artifacts(registry, plan, identity), identity, "refs/heads/main")
+    receipt = merge(
+        plan, artifacts(registry, plan, identity), identity, "refs/heads/main"
+    )
     assert receipt is not None
     registry.commands.clear()
     release(receipt, identity, "v1.2.0", dry_run=True)
     assert not mutations(registry)
     release(receipt, identity, "v1.2.0")
-    assert registry.tags[identity.image("demo", "stack-v1.2.0")] == receipt["targets"][0]["digest"]
+    assert (
+        registry.tags[identity.image("demo", "stack-v1.2.0")]
+        == receipt["targets"][0]["digest"]
+    )
     registry.commands.clear()
     release(receipt, identity, "v1.2.0")
     assert not mutations(registry)
 
 
 @pytest.mark.parametrize(
-    "damage", ["identity", "tag", "digest", "platforms", "duplicate", "empty", "version_conflict"]
+    "damage",
+    [
+        "identity",
+        "tag",
+        "digest",
+        "platforms",
+        "duplicate",
+        "empty",
+        "version_conflict",
+    ],
 )
 def test_release_rejects_tampering_before_mutation(
     registry: Registry, plan: dict[str, Any], identity: BuildIdentity, damage: str
@@ -466,7 +502,9 @@ def test_release_rejects_tampering_before_mutation(
     damage:
         Receipt corruption or registry conflict.
     """
-    receipt = merge(plan, artifacts(registry, plan, identity), identity, "refs/heads/main")
+    receipt = merge(
+        plan, artifacts(registry, plan, identity), identity, "refs/heads/main"
+    )
     assert receipt is not None
     if damage == "identity":
         receipt["identity"]["repository"] = "other/images"
@@ -475,7 +513,9 @@ def test_release_rejects_tampering_before_mutation(
     elif damage == "empty":
         receipt["targets"] = []
     elif damage == "version_conflict":
-        registry.tags[identity.image("demo", "stack-v1.2.0")] = next(iter(registry.documents))
+        registry.tags[identity.image("demo", "stack-v1.2.0")] = next(
+            iter(registry.documents)
+        )
     elif damage == "platforms":
         receipt["targets"][0]["platforms"] = ["linux/amd64"]
     else:
@@ -505,7 +545,9 @@ def test_release_rejects_invalid_semantic_versions(
     version:
         Invalid formal version.
     """
-    receipt = merge(plan, artifacts(registry, plan, identity), identity, "refs/heads/main")
+    receipt = merge(
+        plan, artifacts(registry, plan, identity), identity, "refs/heads/main"
+    )
     assert receipt is not None
     registry.commands.clear()
     with pytest.raises(RepositoryError, match="version must"):
@@ -528,7 +570,9 @@ def test_later_conflict_prevents_earlier_target_mutation(
         Shared identity.
     """
     data = artifacts(registry, plan, identity)
-    plan["targets"].append({**plan["targets"][-1], "name": "other", "target": "other--stack"})
+    plan["targets"].append(
+        {**plan["targets"][-1], "name": "other", "target": "other--stack"}
+    )
     for artifact in data:
         artifact["digests"].append({**artifact["digests"][0], "name": "other"})
     other_build = identity.image("other", "stack-aaaaaaaaaaaa-123-2")
@@ -539,7 +583,9 @@ def test_later_conflict_prevents_earlier_target_mutation(
     del registry.tags[other_build]
     receipt = merge(plan, data, identity, "refs/heads/main")
     assert receipt is not None
-    registry.tags[identity.image("other", "stack-v1.2.0")] = data[0]["digests"][0]["digest"]
+    registry.tags[identity.image("other", "stack-v1.2.0")] = data[0]["digests"][0][
+        "digest"
+    ]
     registry.commands.clear()
     with pytest.raises(RepositoryError, match="immutable version tag conflict"):
         release(receipt, identity, "v1.2.0")

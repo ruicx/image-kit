@@ -84,7 +84,9 @@ def parser() -> argparse.ArgumentParser:
     return result
 
 
-def _run_tests(repo: ImageRepository, args: argparse.Namespace, plan: Mapping[str, Any]) -> None:
+def _run_tests(
+    repo: ImageRepository, args: argparse.Namespace, plan: Mapping[str, Any]
+) -> None:
     """Run native contracts and aggregate failures.
 
     Parameters
@@ -107,7 +109,9 @@ def _run_tests(repo: ImageRepository, args: argparse.Namespace, plan: Mapping[st
         if args.platform not in item["platforms"]:
             continue
         variant = repo.variants[(item["name"], item["variant"])]
-        image = f"{args.registry}/{args.owner}/{item['name']}:{item['variant']}-{suffix}"
+        image = (
+            f"{args.registry}/{args.owner}/{item['name']}:{item['variant']}-{suffix}"
+        )
         for test in variant.tests:
             script = repo.path(test.script)
             command = [
@@ -123,14 +127,16 @@ def _run_tests(repo: ImageRepository, args: argparse.Namespace, plan: Mapping[st
             source = f"source {shlex.quote('/tmp/smoke/' + script.name)}"
             if test.library:
                 source = (
-                    f"source {shlex.quote('/tmp/smoke/' + Path(test.library).name)} && {source}"
+                    f"source {shlex.quote('/tmp/smoke/' + Path(test.library).name)}"
+                    f" && {source}"
                 )
             if test.entrypoint == "bash":
                 command.extend(["--entrypoint", "/bin/bash", image, "-c", source])
             else:
                 command.extend([image, "bash", "-lc", source])
             print(
-                f"Testing {item['name']}/{item['variant']} on {args.platform}: {test.script}",
+                f"Testing {item['name']}/{item['variant']} "
+                f"on {args.platform}: {test.script}",
                 flush=True,
             )
             if subprocess.run(command, check=False).returncode:
@@ -139,7 +145,9 @@ def _run_tests(repo: ImageRepository, args: argparse.Namespace, plan: Mapping[st
         raise RepositoryError(f"smoke execution failed: {', '.join(failed)}")
 
 
-def _build_test(repo: ImageRepository, args: argparse.Namespace, plan: Mapping[str, Any]) -> None:
+def _build_test(
+    repo: ImageRepository, args: argparse.Namespace, plan: Mapping[str, Any]
+) -> None:
     """Validate and build independent components, retaining diagnostics after failures.
 
     Parameters
@@ -169,18 +177,25 @@ def _build_test(repo: ImageRepository, args: argparse.Namespace, plan: Mapping[s
         github_cache=args.github_cache,
     )
     if bake != expected:
-        raise RepositoryError("Bake file does not match the current plan and worker identity")
+        raise RepositoryError(
+            "Bake file does not match the current plan and worker identity"
+        )
     failures: list[str] = []
     for group, value in bake["group"].items():
         if not group.startswith("component-"):
             continue
         try:
             subprocess.run(
-                ["docker", "buildx", "bake", "--file", str(args.bake), group], check=True
+                ["docker", "buildx", "bake", "--file", str(args.bake), group],
+                check=True,
             )
             component_plan = {
                 **plan,
-                "targets": [item for item in plan["targets"] if item["target"] in value["targets"]],
+                "targets": [
+                    item
+                    for item in plan["targets"]
+                    if item["target"] in value["targets"]
+                ],
             }
             _run_tests(repo, args, component_plan)
         except (subprocess.CalledProcessError, RepositoryError):
@@ -220,15 +235,21 @@ def _verify_tested_images(
     for item in plan["targets"]:
         if not item["publish"] or platform not in item["platforms"]:
             continue
-        config = metadata.get(item["target"], {}).get("containerimage.config.digest", "")
+        config = metadata.get(item["target"], {}).get(
+            "containerimage.config.digest", ""
+        )
         if not isinstance(config, str) or not DIGEST.fullmatch(config):
-            raise RepositoryError(f"missing config digest for tested image: {item['target']}")
+            raise RepositoryError(
+                f"missing config digest for tested image: {item['target']}"
+            )
         reference = identity.image(item["name"], f"{item['variant']}-{suffix}")
         tested = subprocess.check_output(
             ["docker", "image", "inspect", reference, "--format", "{{.Id}}"], text=True
         ).strip()
         if config != tested:
-            raise RepositoryError(f"publication image differs from the tested image: {reference}")
+            raise RepositoryError(
+                f"publication image differs from the tested image: {reference}"
+            )
 
 
 def run(arguments: Sequence[str] | None = None) -> int:
@@ -260,14 +281,21 @@ def run(arguments: Sequence[str] | None = None) -> int:
         release_suffix(args.revision, args.build_id)
     if args.command == "release":
         identity = BuildIdentity(
-            args.registry, args.owner, args.repository or "", args.revision, args.build_id
+            args.registry,
+            args.owner,
+            args.repository or "",
+            args.revision,
+            args.build_id,
         )
-        release(load_json(args.publication), identity, args.version, dry_run=args.dry_run)
+        release(
+            load_json(args.publication), identity, args.version, dry_run=args.dry_run
+        )
         return 0
     repo.load()
     if args.command == "validate":
         print(
-            f"Validated {len(repo.families)} images and {len(repo.variants)} variants (schema v2)"
+            f"Validated {len(repo.families)} images "
+            f"and {len(repo.variants)} variants (schema v2)"
         )
     elif args.command == "list":
         for key in repo.topological_order():
@@ -279,7 +307,9 @@ def run(arguments: Sequence[str] | None = None) -> int:
         changed: list[str] = []
         if args.all or args.family or args.target:
             if args.base or args.head:
-                raise RepositoryError("explicit selection cannot be combined with --base/--head")
+                raise RepositoryError(
+                    "explicit selection cannot be combined with --base/--head"
+                )
             selected = repo.select(args.family, args.target)
         elif args.base and args.head:
             changed = repo.changed_files(args.base, args.head)
@@ -318,12 +348,18 @@ def run(arguments: Sequence[str] | None = None) -> int:
             _build_test(repo, args, plan)
         else:
             identity = BuildIdentity(
-                args.registry, args.owner, args.repository or "", args.revision, args.build_id
+                args.registry,
+                args.owner,
+                args.repository or "",
+                args.revision,
+                args.build_id,
             )
             if args.command == "collect":
                 metadata = load_json(args.metadata)
                 _verify_tested_images(plan, metadata, identity, args.platform)
-                write_json(collect(plan, metadata, identity, args.platform), args.output)
+                write_json(
+                    collect(plan, metadata, identity, args.platform), args.output
+                )
             elif args.command == "merge":
                 receipt = merge(
                     plan,

@@ -9,7 +9,13 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from .repository import PLATFORMS, RepositoryError, owner_name, registry_name, release_suffix
+from .repository import (
+    PLATFORMS,
+    RepositoryError,
+    owner_name,
+    registry_name,
+    release_suffix,
+)
 
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 VERSION = re.compile(
@@ -54,8 +60,12 @@ class BuildIdentity:
         release_suffix(self.revision, self.build_id)
         if not self.build_id or not self.repository:
             raise RepositoryError("publication requires source repository and build-id")
-        if self.registry != registry_name(self.registry) or self.owner != owner_name(self.owner):
-            raise RepositoryError("publication identity must use normalized registry and owner")
+        if self.registry != registry_name(self.registry) or self.owner != owner_name(
+            self.owner
+        ):
+            raise RepositoryError(
+                "publication identity must use normalized registry and owner"
+            )
         if self.revision != self.revision.lower():
             raise RepositoryError("publication revision must be lowercase")
 
@@ -87,7 +97,10 @@ class BuildIdentity:
 
 
 def collect(
-    plan: Mapping[str, Any], metadata: Mapping[str, Any], identity: BuildIdentity, platform: str
+    plan: Mapping[str, Any],
+    metadata: Mapping[str, Any],
+    identity: BuildIdentity,
+    platform: str,
 ) -> dict[str, Any]:
     """Collect publishable native digests from file-loaded Bake metadata.
 
@@ -121,7 +134,9 @@ def collect(
             continue
         digest = metadata.get(item["target"], {}).get("containerimage.digest", "")
         if not isinstance(digest, str) or not DIGEST.fullmatch(digest):
-            raise RepositoryError(f"missing or invalid digest metadata: {item['target']}")
+            raise RepositoryError(
+                f"missing or invalid digest metadata: {item['target']}"
+            )
         records.append(
             {
                 "name": item["name"],
@@ -159,7 +174,15 @@ def _inspect(reference: str, *, missing_ok: bool = False) -> dict[str, Any] | No
         If inspection, authentication, transport or descriptor validation fails.
     """
     result = subprocess.run(
-        ["docker", "buildx", "imagetools", "inspect", reference, "--format", "{{json .Manifest}}"],
+        [
+            "docker",
+            "buildx",
+            "imagetools",
+            "inspect",
+            reference,
+            "--format",
+            "{{json .Manifest}}",
+        ],
         capture_output=True,
         text=True,
         check=False,
@@ -167,7 +190,9 @@ def _inspect(reference: str, *, missing_ok: bool = False) -> dict[str, Any] | No
     if result.returncode:
         error = result.stderr.strip()
         absent = re.search(
-            r"\b(?:manifest_unknown|name_unknown|manifest unknown)\b", error, re.IGNORECASE
+            r"\b(?:manifest_unknown|name_unknown|manifest unknown)\b",
+            error,
+            re.IGNORECASE,
         )
         absent = absent or re.search(
             rf"(?:^|\n)(?:ERROR: )?{re.escape(reference)}: not found$", error
@@ -179,7 +204,9 @@ def _inspect(reference: str, *, missing_ok: bool = False) -> dict[str, Any] | No
             return None
         raise RepositoryError(f"registry inspection failed for {reference}: {error}")
     value = json.loads(result.stdout)
-    if not isinstance(value, dict) or not DIGEST.fullmatch(str(value.get("digest", ""))):
+    if not isinstance(value, dict) or not DIGEST.fullmatch(
+        str(value.get("digest", ""))
+    ):
         raise RepositoryError(f"invalid registry descriptor: {reference}")
     return value
 
@@ -197,7 +224,9 @@ def _document(descriptor: Mapping[str, Any]) -> dict[str, Any]:
     dict[str, Any]
         Index document without synthetic digest and size fields.
     """
-    return {key: value for key, value in descriptor.items() if key not in ("digest", "size")}
+    return {
+        key: value for key, value in descriptor.items() if key not in ("digest", "size")
+    }
 
 
 def _platforms(document: Mapping[str, Any]) -> set[str]:
@@ -224,7 +253,10 @@ def _platforms(document: Mapping[str, Any]) -> set[str]:
             raise RepositoryError("index contains an invalid manifest digest")
         platform = item.get("platform", {})
         value = f"{platform.get('os')}/{platform.get('architecture')}"
-        if item.get("annotations", {}).get("vnd.docker.reference.type") == "attestation-manifest":
+        if (
+            item.get("annotations", {}).get("vnd.docker.reference.type")
+            == "attestation-manifest"
+        ):
             continue
         if value not in PLATFORMS:
             raise RepositoryError(f"index contains an unsupported platform: {value}")
@@ -260,7 +292,7 @@ def merge(
     *,
     dry_run: bool = False,
 ) -> dict[str, Any] | None:
-    """Validate a complete native artifact set before publishing build and floating tags.
+    """Validate all native artifacts before publishing build and floating tags.
 
     Parameters
     ----------
@@ -301,14 +333,24 @@ def merge(
             or artifact.get("kind") != "native-digests"
             or artifact.get("identity") != asdict(identity)
         ):
-            raise RepositoryError("native artifact belongs to a different build or schema")
+            raise RepositoryError(
+                "native artifact belongs to a different build or schema"
+            )
         for record in artifact["digests"]:
             key = (record["name"], record["variant"], record["platform"])
-            if key not in expected or key in found or not DIGEST.fullmatch(str(record["digest"])):
-                raise RepositoryError(f"duplicate, unexpected or invalid native digest: {key}")
+            if (
+                key not in expected
+                or key in found
+                or not DIGEST.fullmatch(str(record["digest"]))
+            ):
+                raise RepositoryError(
+                    f"duplicate, unexpected or invalid native digest: {key}"
+                )
             found[key] = record["digest"]
     if found.keys() != expected:
-        raise RepositoryError(f"missing native digests: {sorted(expected - found.keys())}")
+        raise RepositoryError(
+            f"missing native digests: {sorted(expected - found.keys())}"
+        )
     prepared: list[
         tuple[dict[str, Any], str, list[str], dict[str, Any], dict[str, Any] | None]
     ] = []
@@ -329,8 +371,12 @@ def merge(
             check=True,
         )
         document = json.loads(result.stdout)
-        if not isinstance(document, dict) or _platforms(document) != set(item["platforms"]):
-            raise RepositoryError(f"registry sources do not cover planned platforms: {reference}")
+        if not isinstance(document, dict) or _platforms(document) != set(
+            item["platforms"]
+        ):
+            raise RepositoryError(
+                f"registry sources do not cover planned platforms: {reference}"
+            )
         existing = _inspect(reference, missing_ok=True)
         if existing is not None and _document(existing) != document:
             raise RepositoryError(f"immutable tag conflict: {reference}")
@@ -344,7 +390,9 @@ def merge(
             continue
         actual = existing if existing is not None else _inspect(reference)
         if actual is None or _document(actual) != document:
-            raise RepositoryError(f"published index does not match verified sources: {reference}")
+            raise RepositoryError(
+                f"published index does not match verified sources: {reference}"
+            )
         records.append(
             {
                 "name": item["name"],
@@ -361,7 +409,11 @@ def merge(
             _create(floating, [f"{floating.rsplit(':', 1)[0]}@{record['digest']}"])
         if dry_run:
             for item, reference, _, _, _ in prepared:
-                _create(identity.image(item["name"], item["variant"]), [reference], dry_run=True)
+                _create(
+                    identity.image(item["name"], item["variant"]),
+                    [reference],
+                    dry_run=True,
+                )
     if dry_run:
         return None
     return {
@@ -374,7 +426,11 @@ def merge(
 
 
 def release(
-    publication: Mapping[str, Any], identity: BuildIdentity, version: str, *, dry_run: bool = False
+    publication: Mapping[str, Any],
+    identity: BuildIdentity,
+    version: str,
+    *,
+    dry_run: bool = False,
 ) -> None:
     """Promote a verified main publication receipt without rebuilding images.
 
@@ -398,14 +454,18 @@ def release(
     """
     identity.validate()
     if not VERSION.fullmatch(version):
-        raise RepositoryError("version must use vMAJOR.MINOR.PATCH with an optional prerelease")
+        raise RepositoryError(
+            "version must use vMAJOR.MINOR.PATCH with an optional prerelease"
+        )
     if (
         publication.get("schema_version") != 2
         or publication.get("kind") != "publication"
         or publication.get("identity") != asdict(identity)
         or publication.get("ref") != "refs/heads/main"
     ):
-        raise RepositoryError("release requires a matching verified main publication receipt")
+        raise RepositoryError(
+            "release requires a matching verified main publication receipt"
+        )
     prepared: list[tuple[str, str, bool]] = []
     seen: set[str] = set()
     suffix = release_suffix(identity.revision, identity.build_id)
@@ -417,7 +477,9 @@ def release(
             or item["tag"] != source.rsplit(":", 1)[1]
             or not DIGEST.fullmatch(str(item["digest"]))
         ):
-            raise RepositoryError("publication receipt contains duplicate or invalid targets")
+            raise RepositoryError(
+                "publication receipt contains duplicate or invalid targets"
+            )
         seen.add(destination)
         current = _inspect(source)
         if (
@@ -425,12 +487,18 @@ def release(
             or current["digest"] != item["digest"]
             or _platforms(current) != set(item["platforms"])
         ):
-            raise RepositoryError(f"publication source no longer matches its receipt: {source}")
+            raise RepositoryError(
+                f"publication source no longer matches its receipt: {source}"
+            )
         existing = _inspect(destination, missing_ok=True)
         if existing is not None and existing["digest"] != item["digest"]:
             raise RepositoryError(f"immutable version tag conflict: {destination}")
         prepared.append(
-            (destination, f"{source.rsplit(':', 1)[0]}@{item['digest']}", existing is not None)
+            (
+                destination,
+                f"{source.rsplit(':', 1)[0]}@{item['digest']}",
+                existing is not None,
+            )
         )
     if not prepared:
         raise RepositoryError("publication receipt contains no release targets")
@@ -441,5 +509,6 @@ def release(
                 actual = _inspect(destination)
                 if actual is None or actual["digest"] != source.split("@", 1)[1]:
                     raise RepositoryError(
-                        f"released tag does not match its verified digest: {destination}"
+                        "released tag does not match its verified digest: "
+                        f"{destination}"
                     )

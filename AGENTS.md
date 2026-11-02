@@ -34,6 +34,10 @@ Update dependencies in `pyproject.toml` and regenerate `uv.lock` with `uv lock` 
 Commit both together. CI uses locked synchronization; do not bypass a stale lockfile with
 `--frozen`. ty is the Python type checker; do not introduce a second type-checking setup.
 
+Use Ruff with an 88-character line length and double quotes. Preserve the Python 3.11 target and the existing lint rules; use ty with its default configuration.
+
+Use `uv run --no-sync pre-commit install` to enable repository hooks and `uv run --no-sync pre-commit run --all-files` to check all tracked files. Ruff and ty hooks use the locked dev environment. Consumer hooks skip `vendor/`; run the component hooks separately.
+
 All Python modules, classes, functions, and methods need English NumPy-style docstrings and
 complete type annotations using modern builtin generics. Keep helpers focused and avoid global
 mutable state. Preserve unrelated working-tree changes and keep edits scoped to the task.

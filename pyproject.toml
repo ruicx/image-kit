@@ -9,14 +9,19 @@ description = "Manifest-driven container validation, planning, and Buildx Bake t
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
-dependencies = ["jsonschema==4.26.0", "PyYAML==6.0.3"]
+
+dependencies = [
+    "jsonschema==4.26.0",
+    "PyYAML==6.0.3",
+]
 
 [project.optional-dependencies]
 dev = [
-  "pytest==8.4.2",
-  "ruff==0.16.8",
-  "ty==0.0.95",
-  "types-PyYAML==6.0.12.20260906",
+    "pre-commit==4.7.0",
+    "pytest==8.4.2",
+    "ruff==0.16.8",
+    "ty==0.0.95",
+    "types-PyYAML==6.0.12.20260906",
 ]
 
 [project.scripts]
@@ -31,12 +36,15 @@ include = ["image_kit*"]
 image_kit = ["schemas/*.json", "py.typed"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
 addopts = "-p no:cacheprovider"
+testpaths = ["tests"]
 
 [tool.ruff]
-line-length = 100
 target-version = "py311"
+line-length = 88
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.format]
+quote-style = "double"

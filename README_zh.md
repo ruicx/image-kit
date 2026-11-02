@@ -81,6 +81,16 @@ RUN /tmp/scripts/cmake.sh --version "${CMAKE_VERSION}" --sha256 "${CMAKE_SHA256}
 
 ## 验证
 
+同步开发依赖后，在当前仓库安装 Git 提交检查，并可手动检查全部文件：
+
+```bash
+uv sync --locked --extra dev
+uv run --no-sync pre-commit install
+uv run --no-sync pre-commit run --all-files
+```
+
+这些检查包括基础文件检查、Ruff 自动修复与格式化，以及整个项目的 ty 类型检查。Ruff 和 ty 使用项目锁定的开发环境；首次运行基础 hooks 需要网络。消费仓库跳过 `vendor/`，image-kit 的 hooks 在组件仓库中单独安装和运行。
+
 在 Linux 或 Git Bash 中运行：
 
 ```bash

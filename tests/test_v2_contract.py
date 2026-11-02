@@ -32,10 +32,15 @@ def consumer(tmp_path: Path) -> ImageRepository:
         '[tool.image-kit]\nsource-repository="example/images"\n', encoding="utf-8"
     )
     (tmp_path / "common.sh").write_text("true\n", encoding="utf-8")
-    for directory, name, parent in [("core", "base", None), ("product", "app", "base/stack")]:
+    for directory, name, parent in [
+        ("core", "base", None),
+        ("product", "app", "base/stack"),
+    ]:
         folder = tmp_path / "src" / directory
         folder.mkdir(parents=True)
-        (folder / "Dockerfile").write_text("ARG BASE_IMAGE\nFROM ${BASE_IMAGE}\n", encoding="utf-8")
+        (folder / "Dockerfile").write_text(
+            "ARG BASE_IMAGE\nFROM ${BASE_IMAGE}\n", encoding="utf-8"
+        )
         (folder / "smoke.sh").write_text("true\n", encoding="utf-8")
         (folder / "helpers.sh").write_text("true\n", encoding="utf-8")
         test: dict[str, Any] = {"script": f"src/{directory}/smoke.sh"}
@@ -60,7 +65,9 @@ def consumer(tmp_path: Path) -> ImageRepository:
             "platforms": ["linux/arm64"] if parent else ["linux/amd64", "linux/arm64"],
             "inputs": ["common.sh"],
             "publish": True,
-            "variants": [{"id": "stack", "base": base, "build_args": {}, "tests": [test]}],
+            "variants": [
+                {"id": "stack", "base": base, "build_args": {}, "tests": [test]}
+            ],
         }
         (folder / "image.yml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
     return ImageRepository(tmp_path).load()
@@ -85,7 +92,9 @@ def edit(consumer: ImageRepository, directory: str, transform: Any) -> None:
     consumer.load()
 
 
-def test_yaml_name_controls_identity_after_directory_move(consumer: ImageRepository) -> None:
+def test_yaml_name_controls_identity_after_directory_move(
+    consumer: ImageRepository,
+) -> None:
     """Preserve target identity and registry references across directory changes.
 
     Parameters
@@ -98,13 +107,17 @@ def test_yaml_name_controls_identity_after_directory_move(consumer: ImageReposit
     moved = consumer.root / "src/renamed"
     folder.rename(moved)
     path = moved / "image.yml"
-    path.write_text(path.read_text().replace("src/product/", "src/renamed/"), encoding="utf-8")
+    path.write_text(
+        path.read_text().replace("src/product/", "src/renamed/"), encoding="utf-8"
+    )
     consumer.load()
     plan = consumer.make_plan(consumer.select(target="app/stack"))
     assert [item["name"] for item in plan["targets"]] == ["base", "app"]
     assert all(item["platforms"] == ["linux/arm64"] for item in plan["targets"])
     assert plan["targets"][0]["publish"] is False
-    bake = consumer.render_bake(plan, "example", "a" * 40, "load", platform="linux/arm64")
+    bake = consumer.render_bake(
+        plan, "example", "a" * 40, "load", platform="linux/arm64"
+    )
     app = bake["target"]["app--stack"]
     assert app["tags"] == ["ghcr.io/example/app:stack-aaaaaaaaaaaa-local"]
     assert app["contexts"] == {"parent_image": "target:base--stack"}
@@ -179,13 +192,17 @@ def test_invalid_v2_contracts(consumer: ImageRepository, damage: str) -> None:
             edit(
                 consumer,
                 "product",
-                lambda raw: raw["variants"][0]["base"].update(image="ubuntu:24.04", digest=None),
+                lambda raw: raw["variants"][0]["base"].update(
+                    image="ubuntu:24.04", digest=None
+                ),
             )
         elif damage == "missing_helper":
             edit(
                 consumer,
                 "product",
-                lambda raw: raw["variants"][0]["tests"][0].update(library="src/product/absent.sh"),
+                lambda raw: raw["variants"][0]["tests"][0].update(
+                    library="src/product/absent.sh"
+                ),
             )
         else:
             edit(
@@ -195,7 +212,9 @@ def test_invalid_v2_contracts(consumer: ImageRepository, damage: str) -> None:
             )
 
 
-def test_duplicate_yaml_and_v1_have_actionable_errors(consumer: ImageRepository) -> None:
+def test_duplicate_yaml_and_v1_have_actionable_errors(
+    consumer: ImageRepository,
+) -> None:
     """Reject hidden overrides and explicitly identify the v1 migration requirement.
 
     Parameters
@@ -208,7 +227,9 @@ def test_duplicate_yaml_and_v1_have_actionable_errors(consumer: ImageRepository)
     path.write_text(original + "name: other\n", encoding="utf-8")
     with pytest.raises(RepositoryError, match="unique text"):
         consumer.load()
-    path.write_text(original.replace("schema_version: 2", "schema_version: 1"), encoding="utf-8")
+    path.write_text(
+        original.replace("schema_version: 2", "schema_version: 1"), encoding="utf-8"
+    )
     with pytest.raises(RepositoryError, match="migrate schema_version"):
         consumer.load()
 
@@ -244,7 +265,17 @@ def test_cli_identity_smoke_and_docker_errors(
         Docker subprocess replacement.
     """
     path = consumer.root / "plan.json"
-    run(["--root", str(consumer.root), "plan", "--target", "app/stack", "--output", str(path)])
+    run(
+        [
+            "--root",
+            str(consumer.root),
+            "plan",
+            "--target",
+            "app/stack",
+            "--output",
+            str(path),
+        ]
+    )
     calls: list[list[str]] = []
 
     def docker(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
@@ -263,7 +294,9 @@ def test_cli_identity_smoke_and_docker_errors(
             Exit code 125 for the base container.
         """
         calls.append(command)
-        return subprocess.CompletedProcess(command, 125 if "SMOKE_HARD_GATE=0" in command else 0)
+        return subprocess.CompletedProcess(
+            command, 125 if "SMOKE_HARD_GATE=0" in command else 0
+        )
 
     monkeypatch.setattr(subprocess, "run", docker)
     args = [
@@ -303,8 +336,12 @@ def test_publication_requires_build_identity_and_no_cache_exports_on_load(
     """
     plan = consumer.make_plan(consumer.select(target="app/stack"))
     with pytest.raises(RepositoryError, match="build-id"):
-        consumer.render_bake(plan, "example", "a" * 40, "publish", platform="linux/arm64")
-    local = consumer.render_bake(plan, "example", "a" * 40, "load", platform="linux/arm64")
+        consumer.render_bake(
+            plan, "example", "a" * 40, "publish", platform="linux/arm64"
+        )
+    local = consumer.render_bake(
+        plan, "example", "a" * 40, "load", platform="linux/arm64"
+    )
     assert all("cache-from" not in target for target in local["target"].values())
     cached = consumer.render_bake(
         plan, "example", "a" * 40, "load", platform="linux/arm64", github_cache=True
@@ -377,7 +414,9 @@ def test_build_test_continues_independent_graph_after_failure(
     """
     folder = consumer.root / "src/independent"
     folder.mkdir()
-    raw = yaml.safe_load((consumer.root / "src/core/image.yml").read_text(encoding="utf-8"))
+    raw = yaml.safe_load(
+        (consumer.root / "src/core/image.yml").read_text(encoding="utf-8")
+    )
     raw["name"] = "other"
     (folder / "image.yml").write_text(yaml.safe_dump(raw), encoding="utf-8")
     consumer.load()
@@ -386,7 +425,11 @@ def test_build_test_continues_independent_graph_after_failure(
     path.write_text(json.dumps(plan), encoding="utf-8")
     bake = consumer.root / "bake.json"
     bake.write_text(
-        json.dumps(consumer.render_bake(plan, "example", "a" * 40, "load", platform="linux/arm64")),
+        json.dumps(
+            consumer.render_bake(
+                plan, "example", "a" * 40, "load", platform="linux/arm64"
+            )
+        ),
         encoding="utf-8",
     )
     calls: list[list[str]] = []
@@ -526,6 +569,8 @@ def test_collect_accepts_only_the_tested_image(
         assert json.loads(output.read_text())["digests"][0]["name"] == "app"
         assert len(calls) == 1
     else:
-        with pytest.raises(RepositoryError, match="differs from the tested|missing config digest"):
+        with pytest.raises(
+            RepositoryError, match="differs from the tested|missing config digest"
+        ):
             run(command)
         assert not output.exists()

@@ -20,7 +20,9 @@ import yaml
 TargetKey = tuple[str, str]
 SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
 PLATFORMS = ("linux/amd64", "linux/arm64")
-SENSITIVE_ARGUMENT_PATTERN = re.compile(r"(?:SECRET|PASSWORD|TOKEN|PRIVATE_KEY)", re.IGNORECASE)
+SENSITIVE_ARGUMENT_PATTERN = re.compile(
+    r"(?:SECRET|PASSWORD|TOKEN|PRIVATE_KEY)", re.IGNORECASE
+)
 
 
 class RepositoryError(RuntimeError):
@@ -85,7 +87,9 @@ class SmokeTest:
 class ManifestLoader(yaml.SafeLoader):
     """Reject duplicate or non-text YAML mapping keys."""
 
-    def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict[Any, Any]:
+    def construct_mapping(
+        self, node: yaml.MappingNode, deep: bool = False
+    ) -> dict[Any, Any]:
         """Construct a mapping with unique text keys.
 
         Parameters
@@ -295,8 +299,12 @@ class ImageRepository:
             raise RepositoryError("tool.image-kit: must be a TOML table")
         for name in ("rebuild-inputs", "shell-inputs"):
             value = settings.get(name, [])
-            if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-                raise RepositoryError(f"tool.image-kit.{name}: must be a list of path patterns")
+            if not isinstance(value, list) or not all(
+                isinstance(item, str) for item in value
+            ):
+                raise RepositoryError(
+                    f"tool.image-kit.{name}: must be a list of path patterns"
+                )
         self.rebuild_inputs = (
             ".dockerignore",
             "pyproject.toml",
@@ -307,7 +315,9 @@ class ImageRepository:
         self.shell_inputs = tuple(settings.get("shell-inputs", []))
         self.registry = registry_name(str(settings.get("registry", "ghcr.io")))
         self.source_repository = settings.get("source-repository")
-        if self.source_repository is not None and not isinstance(self.source_repository, str):
+        if self.source_repository is not None and not isinstance(
+            self.source_repository, str
+        ):
             raise RepositoryError("tool.image-kit.source-repository: expected a string")
         if "manifest-format" in settings:
             raise RepositoryError(
@@ -335,7 +345,12 @@ class ImageRepository:
             If the path or its symlink target escapes the consumer.
         """
         relative = PurePosixPath(value)
-        if relative.is_absolute() or ".." in relative.parts or "\\" in value or ":" in value:
+        if (
+            relative.is_absolute()
+            or ".." in relative.parts
+            or "\\" in value
+            or ":" in value
+        ):
             raise RepositoryError(f"path must stay inside the repository: {value}")
         result = self.root / value
         if not result.resolve().is_relative_to(self.root):
@@ -356,7 +371,9 @@ class ImageRepository:
             If schema, input paths, identifiers or dependencies are invalid.
         """
         schema = json.loads(
-            files("image_kit").joinpath("schemas/image.schema.json").read_text(encoding="utf-8")
+            files("image_kit")
+            .joinpath("schemas/image.schema.json")
+            .read_text(encoding="utf-8")
         )
         validator = jsonschema.Draft202012Validator(schema)
         self.families.clear()
@@ -374,7 +391,8 @@ class ImageRepository:
             except jsonschema.ValidationError as error:
                 details = "; ".join(item.message for item in error.context)
                 raise RepositoryError(
-                    f"{path}: {'.'.join(map(str, error.absolute_path))}: {error.message}; {details}"
+                    f"{path}: {'.'.join(map(str, error.absolute_path))}: "
+                    f"{error.message}; {details}"
                 ) from error
             family = self._parse_family(path, raw)
             if family.name in self.families:
@@ -386,7 +404,9 @@ class ImageRepository:
                         f"duplicate variant: {variant.family}/{variant.identifier}"
                     )
                 if variant.target_name in target_names:
-                    raise RepositoryError(f"colliding Bake target name: {variant.target_name}")
+                    raise RepositoryError(
+                        f"colliding Bake target name: {variant.target_name}"
+                    )
                 self.variants[variant.key] = variant
                 target_names.add(variant.target_name)
         if not self.families:
@@ -424,7 +444,9 @@ class ImageRepository:
                     base_image=base.get("image", base.get("context", "")),
                     base_digest=base.get("digest"),
                     build_args={
-                        key: str(value).lower() if isinstance(value, bool) else str(value)
+                        key: str(value).lower()
+                        if isinstance(value, bool)
+                        else str(value)
                         for key, value in item["build_args"].items()
                     },
                     mirror=item.get("mirror"),
@@ -505,9 +527,13 @@ class ImageRepository:
                         f"{family.name}: external base requires an explicit version tag"
                     )
                 if sensitive := sorted(
-                    key for key in variant.build_args if SENSITIVE_ARGUMENT_PATTERN.search(key)
+                    key
+                    for key in variant.build_args
+                    if SENSITIVE_ARGUMENT_PATTERN.search(key)
                 ):
-                    raise RepositoryError(f"{family.name}: secret-like keys forbidden: {sensitive}")
+                    raise RepositoryError(
+                        f"{family.name}: secret-like keys forbidden: {sensitive}"
+                    )
                 for dependency in variant.dependencies:
                     if dependency.key not in self.variants:
                         raise RepositoryError(
@@ -522,13 +548,19 @@ class ImageRepository:
                 for test in variant.tests:
                     script = self.path(test.script)
                     if not script.is_file():
-                        raise RepositoryError(f"{family.name}: missing smoke script {test.script}")
+                        raise RepositoryError(
+                            f"{family.name}: missing smoke script {test.script}"
+                        )
                     if test.library:
                         library = self.path(test.library)
                         if not library.is_file() or library.parent != script.parent:
-                            raise RepositoryError("smoke library must exist beside its script")
+                            raise RepositoryError(
+                                "smoke library must exist beside its script"
+                            )
                         if test.library not in test.inputs:
-                            raise RepositoryError("smoke inputs must include the library")
+                            raise RepositoryError(
+                                "smoke inputs must include the library"
+                            )
                     for pattern in test.inputs:
                         self._input_files(pattern)
 
@@ -553,7 +585,9 @@ class ImageRepository:
                         paths.update(self._input_files(pattern))
         return sorted(path for path in paths if path.suffix == ".sh")
 
-    def topological_order(self, subset: Iterable[TargetKey] | None = None) -> list[TargetKey]:
+    def topological_order(
+        self, subset: Iterable[TargetKey] | None = None
+    ) -> list[TargetKey]:
         """Order image variants so every dependency precedes its consumers.
 
         Parameters
@@ -591,7 +625,9 @@ class ImageRepository:
         if len(result) != len(selected):
             cyclic = sorted(key for key, degree in indegree.items() if degree > 0)
             formatted = ", ".join(f"{family}/{variant}" for family, variant in cyclic)
-            raise RepositoryError(f"image dependency graph contains a cycle: {formatted}")
+            raise RepositoryError(
+                f"image dependency graph contains a cycle: {formatted}"
+            )
         return result
 
     def component_groups(self, subset: Iterable[TargetKey]) -> list[set[TargetKey]]:
@@ -689,7 +725,9 @@ class ImageRepository:
 
                 for variant in family.variants:
                     test_patterns = [
-                        pattern for test in variant.tests for pattern in (test.script, *test.inputs)
+                        pattern
+                        for test in variant.tests
+                        for pattern in (test.script, *test.inputs)
                     ]
                     if any(
                         fnmatch.fnmatchcase(path, pattern)
@@ -725,7 +763,7 @@ class ImageRepository:
         set[TargetKey]
             Selected targets plus their transitive ancestors.
         """
-        # Publication selection expands upward so internal bases are built from this commit.
+        # Expand publication selection upward to build internal bases from this commit.
         closure = set(publish_targets)
         queue = deque(closure)
         while queue:
@@ -735,7 +773,9 @@ class ImageRepository:
                     queue.append(dependency.key)
         return closure
 
-    def select(self, family: str | None = None, target: str | None = None) -> set[TargetKey]:
+    def select(
+        self, family: str | None = None, target: str | None = None
+    ) -> set[TargetKey]:
         """Resolve an explicit family, exact target or all targets.
 
         Parameters
@@ -801,7 +841,9 @@ class ImageRepository:
         if platform is not None and platform not in PLATFORMS:
             raise RepositoryError(f"unsupported platform {platform}")
         if platform:
-            selected = {key for key in selected if platform in self.families[key[0]].platforms}
+            selected = {
+                key for key in selected if platform in self.families[key[0]].platforms
+            }
         closure = self.build_closure(selected)
         platforms = {
             key: ({platform} if platform else set(self.families[key[0]].platforms))
@@ -826,7 +868,9 @@ class ImageRepository:
             {
                 "platform": item,
                 "platform_id": item.split("/")[1],
-                "runner": "ubuntu-24.04" if item == "linux/amd64" else "ubuntu-24.04-arm",
+                "runner": "ubuntu-24.04"
+                if item == "linux/amd64"
+                else "ubuntu-24.04-arm",
             }
             for item in PLATFORMS
             if any(item in target["platforms"] for target in targets)
@@ -929,7 +973,9 @@ class ImageRepository:
             family = self.families[key[0]]
             version = f"{variant.identifier}-{suffix}"
             if len(version) > 128:
-                raise RepositoryError(f"generated tag exceeds 128 characters: {version}")
+                raise RepositoryError(
+                    f"generated tag exceeds 128 characters: {version}"
+                )
             image_path = f"{host}/{namespace}/{family.name}"
             args = {
                 **variant.build_args,
@@ -948,7 +994,8 @@ class ImageRepository:
                 "pull": True,
                 "args": args,
                 "contexts": {
-                    dependency.context: f"target:{self.variants[dependency.key].target_name}"
+                    dependency.context: "target:"
+                    + self.variants[dependency.key].target_name
                     for dependency in variant.dependencies
                 },
                 "labels": {
@@ -983,7 +1030,10 @@ class ImageRepository:
         groups = {"default": {"targets": list(targets)}}
         for index, group in enumerate(self.component_groups(keys)):
             groups[f"component-{index}"] = {
-                "targets": [self.variants[key].target_name for key in self.topological_order(group)]
+                "targets": [
+                    self.variants[key].target_name
+                    for key in self.topological_order(group)
+                ]
             }
         return {"group": groups, "target": targets}
 
@@ -1034,7 +1084,9 @@ def release_suffix(revision: str, build_id: str | None = None) -> str:
     if not SHA_PATTERN.fullmatch(revision):
         raise RepositoryError("revision must be a full forty-character Git SHA")
     if build_id is not None and not re.fullmatch(r"[1-9][0-9]*-[1-9][0-9]*", build_id):
-        raise RepositoryError("build-id must use positive numeric run-id-attempt format")
+        raise RepositoryError(
+            "build-id must use positive numeric run-id-attempt format"
+        )
     return f"{revision[:12].lower()}-{build_id or 'local'}"
 
 
