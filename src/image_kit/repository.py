@@ -11,14 +11,15 @@ from collections import defaultdict, deque
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from importlib.resources import files
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import jsonschema
 import yaml
 
 TargetKey = tuple[str, str]
-SHA_PATTERN = re.compile(r"^[0-9a-f]{12,40}$")
+SHA_PATTERN = re.compile(r"^[0-9a-fA-F]{40}$")
+PLATFORMS = ("linux/amd64", "linux/arm64")
 SENSITIVE_ARGUMENT_PATTERN = re.compile(r"(?:SECRET|PASSWORD|TOKEN|PRIVATE_KEY)", re.IGNORECASE)
 
 
@@ -46,8 +47,71 @@ class Dependency:
 
     @property
     def key(self) -> TargetKey:
-        """Return the repository key of the dependency target."""
+        """Return the repository key of the dependency target.
+
+        Returns
+        -------
+        TargetKey
+            Return the repository key of the dependency target.
+        """
         return (self.family, self.variant)
+
+
+@dataclass(frozen=True)
+class SmokeTest:
+    """Store a smoke execution contract.
+
+    Attributes
+    ----------
+    script:
+        Consumer-relative script path.
+    library:
+        Optional helper beside the script.
+    inputs:
+        Additional change-detection inputs.
+    policy:
+        Required or helper-managed advisory assertions.
+    entrypoint:
+        Bash override or the original image entrypoint.
+    """
+
+    script: str
+    library: str | None
+    inputs: tuple[str, ...]
+    policy: str
+    entrypoint: str
+
+
+class ManifestLoader(yaml.SafeLoader):
+    """Reject duplicate or non-text YAML mapping keys."""
+
+    def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict[Any, Any]:
+        """Construct a mapping with unique text keys.
+
+        Parameters
+        ----------
+        node:
+            YAML mapping node.
+        deep:
+            Whether to construct nested objects immediately.
+
+        Returns
+        -------
+        dict[str, Any]
+            Validated mapping.
+
+        Raises
+        ------
+        RepositoryError
+            If mapping keys are duplicated or are not text.
+        """
+        result: dict[str, Any] = {}
+        for key_node, value_node in node.value:
+            key = self.construct_object(key_node, deep=deep)
+            if not isinstance(key, str) or key in result:
+                raise RepositoryError(f"YAML mapping keys must be unique text: {key!r}")
+            result[key] = self.construct_object(value_node, deep=deep)
+        return result
 
 
 @dataclass(frozen=True)
@@ -74,7 +138,7 @@ class Variant:
     dependencies:
         Internal image targets provided as named BuildKit contexts.
     tests:
-        Repository-relative smoke-test scripts.
+        Smoke execution contracts.
     """
 
     family: str
@@ -85,21 +149,39 @@ class Variant:
     mirror: str | None
     ssh_mode: str | None
     dependencies: tuple[Dependency, ...]
-    tests: tuple[str, ...]
+    tests: tuple[SmokeTest, ...]
 
     @property
     def key(self) -> TargetKey:
-        """Return the unique repository key for this variant."""
+        """Return the unique repository key for this variant.
+
+        Returns
+        -------
+        TargetKey
+            Return the unique repository key for this variant.
+        """
         return (self.family, self.identifier)
 
     @property
     def target_name(self) -> str:
-        """Return the normalized Buildx Bake target name."""
+        """Return the normalized Buildx Bake target name.
+
+        Returns
+        -------
+        str
+            Return the normalized Buildx Bake target name.
+        """
         return sanitize_target(f"{self.family}--{self.identifier}")
 
     @property
     def base_reference(self) -> str:
-        """Return the pinned reference or the explicitly tracked tag."""
+        """Return the pinned reference or the explicitly tracked tag.
+
+        Returns
+        -------
+        str
+            Return the pinned reference or the explicitly tracked tag.
+        """
         if self.base_digest is None:
             return self.base_image
         return f"{self.base_image}@{self.base_digest}"
@@ -112,7 +194,7 @@ class Family:
     Attributes
     ----------
     name:
-        Family name, which must match its directory name.
+        Explicit published name, independent of its directory name.
     directory:
         Absolute path to the family directory.
     description:
@@ -224,215 +306,252 @@ class ImageRepository:
         )
         self.shell_inputs = tuple(settings.get("shell-inputs", []))
         self.registry = registry_name(str(settings.get("registry", "ghcr.io")))
-        self.cache = settings.get("cache")
-        if self.cache not in (None, "gha"):
-            raise RepositoryError("tool.image-kit.cache: expected 'gha' or no value")
+        self.source_repository = settings.get("source-repository")
+        if self.source_repository is not None and not isinstance(self.source_repository, str):
+            raise RepositoryError("tool.image-kit.source-repository: expected a string")
+        if "manifest-format" in settings:
+            raise RepositoryError(
+                "manifest-format was removed; migrate manifests to schema_version: 2"
+            )
         self.families: dict[str, Family] = {}
         self.variants: dict[TargetKey, Variant] = {}
 
-    def load(self) -> ImageRepository:
-        """Load and validate every image manifest.
+    def path(self, value: str) -> Path:
+        """Resolve a repository-relative file or pattern without allowing escapes.
+
+        Parameters
+        ----------
+        value:
+            Portable relative path.
 
         Returns
         -------
-        ImageRepository
-            This repository instance populated with families and variants.
+        Path
+            Absolute path inside the consumer root.
 
         Raises
         ------
         RepositoryError
-            If the schema, a manifest, a path, or the dependency graph is invalid.
+            If the path or its symlink target escapes the consumer.
+        """
+        relative = PurePosixPath(value)
+        if relative.is_absolute() or ".." in relative.parts or "\\" in value or ":" in value:
+            raise RepositoryError(f"path must stay inside the repository: {value}")
+        result = self.root / value
+        if not result.resolve().is_relative_to(self.root):
+            raise RepositoryError(f"path escapes repository: {value}")
+        return result
+
+    def load(self) -> ImageRepository:
+        """Load v2 manifests using the package schema and validate the complete graph.
+
+        Returns
+        -------
+        ImageRepository
+            Populated repository.
+
+        Raises
+        ------
+        RepositoryError
+            If schema, input paths, identifiers or dependencies are invalid.
         """
         schema = json.loads(
             files("image_kit").joinpath("schemas/image.schema.json").read_text(encoding="utf-8")
         )
         validator = jsonschema.Draft202012Validator(schema)
-        manifests = sorted((self.root / "src").glob("*/image.yml"))
-        if not manifests:
-            raise RepositoryError("no image manifests found under src/<family>/image.yml")
-
-        errors: list[str] = []
-        raw_manifests: list[tuple[Path, dict[str, Any]]] = []
-        for path in manifests:
+        self.families.clear()
+        self.variants.clear()
+        target_names: set[str] = set()
+        for path in sorted((self.root / "src").glob("*/image.yml")):
+            self.path(path.relative_to(self.root).as_posix())
+            raw = yaml.load(path.read_text(encoding="utf-8"), Loader=ManifestLoader)
+            if isinstance(raw, dict) and raw.get("schema_version") == 1:
+                raise RepositoryError(
+                    f"{path}: migrate schema_version: 1 to 2; see docs/migration-v2.md"
+                )
             try:
-                loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
-            except yaml.YAMLError as parse_error:
-                errors.append(f"{path.relative_to(self.root)}: invalid YAML: {parse_error}")
-                continue
-            if not isinstance(loaded, dict):
-                errors.append(f"{path.relative_to(self.root)}: root must be a mapping")
-                continue
-            for schema_error in sorted(
-                validator.iter_errors(loaded), key=lambda item: list(item.path)
-            ):
-                field = ".".join(str(part) for part in schema_error.absolute_path) or "<root>"
-                errors.append(f"{path.relative_to(self.root)}:{field}: {schema_error.message}")
-            raw_manifests.append((path, loaded))
-
-        if errors:
-            raise RepositoryError("manifest validation failed:\n" + "\n".join(errors))
-
-        for path, raw in raw_manifests:
+                validator.validate(raw)
+            except jsonschema.ValidationError as error:
+                details = "; ".join(item.message for item in error.context)
+                raise RepositoryError(
+                    f"{path}: {'.'.join(map(str, error.absolute_path))}: {error.message}; {details}"
+                ) from error
             family = self._parse_family(path, raw)
             if family.name in self.families:
-                raise RepositoryError(f"duplicate image family name: {family.name}")
-            if family.name != path.parent.name:
-                raise RepositoryError(
-                    f"{path.relative_to(self.root)}: name '{family.name}' must match directory"
-                )
+                raise RepositoryError(f"duplicate image name: {family.name}")
             self.families[family.name] = family
             for variant in family.variants:
                 if variant.key in self.variants:
                     raise RepositoryError(
-                        f"{family.name}: duplicate variant id '{variant.identifier}'"
+                        f"duplicate variant: {variant.family}/{variant.identifier}"
                     )
+                if variant.target_name in target_names:
+                    raise RepositoryError(f"colliding Bake target name: {variant.target_name}")
                 self.variants[variant.key] = variant
-
+                target_names.add(variant.target_name)
+        if not self.families:
+            raise RepositoryError("no manifests found under src/*/image.yml")
         self._validate_paths_and_dependencies()
         self.topological_order()
         return self
 
     def _parse_family(self, path: Path, raw: dict[str, Any]) -> Family:
-        """Normalize a schema-valid manifest into immutable data models.
+        """Normalize a v2 manifest into immutable models.
 
         Parameters
         ----------
         path:
-            Path to the family manifest.
+            Manifest location, independent of its published name.
         raw:
-            Parsed manifest mapping.
+            Schema-valid manifest.
 
         Returns
         -------
         Family
-            Normalized family definition.
+            Normalized image family.
         """
-        family_name = str(raw["name"])
         variants: list[Variant] = []
-        for raw_variant in raw["variants"]:
-            dependencies = tuple(
-                Dependency(
-                    context=str(item["context"]),
-                    family=str(item["family"]),
-                    variant=str(item["variant"]),
-                )
-                for item in raw_variant["dependencies"]
-            )
+        for item in raw["variants"]:
+            base = item["base"]
+            dependencies = ()
+            if "target" in base:
+                parent, version = base["target"].split("/")
+                dependencies = (Dependency(base["context"], parent, version),)
             variants.append(
                 Variant(
-                    family=family_name,
-                    identifier=str(raw_variant["id"]),
-                    base_image=str(raw_variant["base"]["image"]),
-                    base_digest=(
-                        str(raw_variant["base"]["digest"])
-                        if raw_variant["base"]["digest"] is not None
-                        else None
-                    ),
+                    family=raw["name"],
+                    identifier=item["id"],
+                    base_image=base.get("image", base.get("context", "")),
+                    base_digest=base.get("digest"),
                     build_args={
-                        key: str(value) for key, value in raw_variant["build_args"].items()
+                        key: str(value).lower() if isinstance(value, bool) else str(value)
+                        for key, value in item["build_args"].items()
                     },
-                    mirror=raw_variant.get("mirror"),
-                    ssh_mode=raw_variant.get("runtime", {}).get("ssh", {}).get("mode"),
+                    mirror=item.get("mirror"),
+                    ssh_mode=item.get("runtime", {}).get("ssh", {}).get("mode"),
                     dependencies=dependencies,
-                    tests=tuple(str(item) for item in raw_variant["tests"]),
+                    tests=tuple(
+                        SmokeTest(
+                            test["script"],
+                            test.get("library"),
+                            tuple(test.get("inputs", [])),
+                            test.get("policy", "required"),
+                            test.get("entrypoint", "bash"),
+                        )
+                        for test in item["tests"]
+                    ),
                 )
             )
         return Family(
-            name=family_name,
+            name=raw["name"],
             directory=path.parent,
-            description=str(raw["description"]),
-            dockerfile=self.root / str(raw["dockerfile"]),
-            context=self.root / str(raw["context"]),
-            platforms=tuple(str(item) for item in raw["platforms"]),
-            inputs=tuple(str(item) for item in raw["inputs"]),
-            publish=bool(raw["publish"]),
+            description=raw["description"],
+            dockerfile=self.path(raw["dockerfile"]),
+            context=self.path(raw["context"]),
+            platforms=tuple(raw["platforms"]),
+            inputs=tuple(raw["inputs"]),
+            publish=raw["publish"],
             variants=tuple(variants),
         )
 
-    def _validate_paths_and_dependencies(self) -> None:
-        """Validate repository paths, build arguments, tests, and dependency edges.
+    def _input_files(self, pattern: str) -> list[Path]:
+        """Resolve a declared input to files within the repository.
+
+        Parameters
+        ----------
+        pattern:
+            Relative glob or file path.
+
+        Returns
+        -------
+        list[Path]
+            Validated matches.
 
         Raises
         ------
         RepositoryError
-            If any semantic constraint outside the JSON Schema is violated.
+            If an input is missing, is a directory or escapes the root.
+        """
+        self.path(pattern)
+        matches = list(self.root.glob(pattern))
+        if not matches or any(not path.is_file() for path in matches):
+            raise RepositoryError(
+                f"input must match files: {pattern}; for submodule inputs, run "
+                "git submodule update --init --recursive"
+            )
+        for path in matches:
+            self.path(path.relative_to(self.root).as_posix())
+        return matches
+
+    def _validate_paths_and_dependencies(self) -> None:
+        """Validate paths, external bases, smoke contracts and parent coverage.
+
+        Raises
+        ------
+        RepositoryError
+            If any semantic build contract is invalid.
         """
         for family in self.families.values():
-            for label, path in (("dockerfile", family.dockerfile), ("context", family.context)):
-                if not path.exists():
-                    raise RepositoryError(f"{family.name}.{label}: path does not exist: {path}")
-                try:
-                    path.resolve().relative_to(self.root)
-                except ValueError as error:
-                    raise RepositoryError(
-                        f"{family.name}.{label}: path escapes repository: {path}"
-                    ) from error
+            if not family.dockerfile.is_file():
+                raise RepositoryError(f"{family.name}: missing Dockerfile")
             for pattern in family.inputs:
-                if not list(self.root.glob(pattern)):
-                    raise RepositoryError(
-                        f"{family.name}.inputs: pattern matches nothing: {pattern}; "
-                        "if the input belongs to a submodule, run "
-                        "git submodule update --init --recursive"
-                    )
+                self._input_files(pattern)
             for variant in family.variants:
-                image_name = variant.base_image.rsplit("/", maxsplit=1)[-1]
-                if ":" not in image_name:
+                if not variant.dependencies and (
+                    not re.search(r":[^/:@]+$", variant.base_image)
+                    or variant.base_image.endswith((":latest", ":master"))
+                ):
                     raise RepositoryError(
-                        f"{family.name}.{variant.identifier}.base.image: "
-                        "an explicit version tag is required"
+                        f"{family.name}: external base requires an explicit version tag"
                     )
-                sensitive_args = sorted(
+                if sensitive := sorted(
                     key for key in variant.build_args if SENSITIVE_ARGUMENT_PATTERN.search(key)
-                )
-                if sensitive_args:
-                    raise RepositoryError(
-                        f"{family.name}.{variant.identifier}.build_args: secret-like keys are "
-                        f"forbidden: {', '.join(sensitive_args)}"
-                    )
-                contexts: set[str] = set()
+                ):
+                    raise RepositoryError(f"{family.name}: secret-like keys forbidden: {sensitive}")
                 for dependency in variant.dependencies:
                     if dependency.key not in self.variants:
                         raise RepositoryError(
-                            f"{family.name}.{variant.identifier}.dependencies: unknown target "
-                            f"{dependency.family}/{dependency.variant}"
+                            f"unknown target {dependency.family}/{dependency.variant}"
                         )
-                    if self.families[dependency.family].platforms != family.platforms:
+                    if not set(family.platforms).issubset(
+                        self.families[dependency.family].platforms
+                    ):
                         raise RepositoryError(
-                            f"{family.name}.{variant.identifier}.dependencies: "
-                            f"platform mismatch with {dependency.family}/{dependency.variant}"
+                            f"{family.name}: dependency must support its platforms"
                         )
-                    if dependency.context in contexts:
-                        raise RepositoryError(
-                            f"{family.name}.{variant.identifier}.dependencies: duplicate context "
-                            f"'{dependency.context}'"
-                        )
-                    contexts.add(dependency.context)
                 for test in variant.tests:
-                    test_path = self.root / test
-                    if not test_path.is_file():
-                        raise RepositoryError(
-                            f"{family.name}.{variant.identifier}.tests: file not found: {test}"
-                        )
+                    script = self.path(test.script)
+                    if not script.is_file():
+                        raise RepositoryError(f"{family.name}: missing smoke script {test.script}")
+                    if test.library:
+                        library = self.path(test.library)
+                        if not library.is_file() or library.parent != script.parent:
+                            raise RepositoryError("smoke library must exist beside its script")
+                        if test.library not in test.inputs:
+                            raise RepositoryError("smoke inputs must include the library")
+                    for pattern in test.inputs:
+                        self._input_files(pattern)
 
     def shell_files(self) -> list[Path]:
-        """Return ShellCheck inputs used by manifests and repository tooling.
+        """List manifest and configured shell inputs.
 
         Returns
         -------
-        list[pathlib.Path]
-            Sorted, de-duplicated absolute paths to shell scripts.
+        list[Path]
+            Sorted shell scripts.
         """
         paths: set[Path] = set()
         for pattern in self.shell_inputs:
-            paths.update(path for path in self.root.glob(pattern) if path.suffix == ".sh")
+            paths.update(self._input_files(pattern))
         for family in self.families.values():
             for pattern in family.inputs:
-                paths.update(path for path in self.root.glob(pattern) if path.suffix == ".sh")
+                paths.update(self._input_files(pattern))
             for variant in family.variants:
-                paths.update(
-                    self.root / test for test in variant.tests if Path(test).suffix == ".sh"
-                )
-        return sorted(paths)
+                for test in variant.tests:
+                    paths.add(self.path(test.script))
+                    for pattern in test.inputs:
+                        paths.update(self._input_files(pattern))
+        return sorted(path for path in paths if path.suffix == ".sh")
 
     def topological_order(self, subset: Iterable[TargetKey] | None = None) -> list[TargetKey]:
         """Order image variants so every dependency precedes its consumers.
@@ -513,36 +632,25 @@ class ImageRepository:
         return groups
 
     def changed_files(self, base: str, head: str) -> list[str]:
-        """List files changed between two Git revisions using merge-base semantics.
+        """Read both sides of renames and deletions between explicit revisions.
 
         Parameters
         ----------
         base:
-            Base Git revision.
+            Diff base; callers resolve PR merge bases explicitly.
         head:
-            Head Git revision.
+            Diff head.
 
         Returns
         -------
         list[str]
-            Repository-relative paths using forward slashes.
-
-        Raises
-        ------
-        RepositoryError
-            If Git cannot calculate the diff.
+            Changed consumer-relative paths.
         """
-        command = ["git", "diff", "--name-only", f"{base}...{head}"]
-        result = subprocess.run(
-            command,
+        return subprocess.check_output(
+            ["git", "diff", "--no-renames", "--name-only", base, head, "--"],
             cwd=self.root,
-            check=False,
-            capture_output=True,
             text=True,
-        )
-        if result.returncode != 0:
-            raise RepositoryError(f"git diff failed: {result.stderr.strip()}")
-        return [line.strip().replace("\\", "/") for line in result.stdout.splitlines() if line]
+        ).splitlines()
 
     def affected(self, changed_files: Sequence[str]) -> set[TargetKey]:
         """Calculate directly changed variants and all transitive consumers.
@@ -567,13 +675,28 @@ class ImageRepository:
         else:
             direct = set()
             for family in self.families.values():
-                family_prefix = f"src/{family.name}/"
-                if any(path.startswith(family_prefix) for path in changed_files) or any(
-                    fnmatch.fnmatch(path, pattern)
-                    for pattern in family.inputs
+                patterns = [
+                    family.dockerfile.relative_to(self.root).as_posix(),
+                    (family.directory / "image.yml").relative_to(self.root).as_posix(),
+                    *family.inputs,
+                ]
+                if any(
+                    fnmatch.fnmatchcase(path, pattern)
                     for path in changed_files
+                    for pattern in patterns
                 ):
                     direct.update(variant.key for variant in family.variants)
+
+                for variant in family.variants:
+                    test_patterns = [
+                        pattern for test in variant.tests for pattern in (test.script, *test.inputs)
+                    ]
+                    if any(
+                        fnmatch.fnmatchcase(path, pattern)
+                        for path in changed_files
+                        for pattern in test_patterns
+                    ):
+                        direct.add(variant.key)
 
         # Reverse edges let a changed base propagate to every transitive consumer.
         reverse: dict[TargetKey, set[TargetKey]] = defaultdict(set)
@@ -612,40 +735,134 @@ class ImageRepository:
                     queue.append(dependency.key)
         return closure
 
+    def select(self, family: str | None = None, target: str | None = None) -> set[TargetKey]:
+        """Resolve an explicit family, exact target or all targets.
+
+        Parameters
+        ----------
+        family:
+            YAML image name.
+        target:
+            Exact name/variant reference.
+
+        Returns
+        -------
+        set[TargetKey]
+            Requested build outputs.
+
+        Raises
+        ------
+        RepositoryError
+            If selection names are unknown or ambiguous.
+        """
+        if family and target:
+            raise RepositoryError("choose either --family or --target")
+        if target:
+            parts = target.split("/")
+            if len(parts) != 2 or (parts[0], parts[1]) not in self.variants:
+                raise RepositoryError(f"unknown target {target}")
+            return {(parts[0], parts[1])}
+        if family:
+            if family not in self.families:
+                raise RepositoryError(f"unknown family {family}")
+            return {variant.key for variant in self.families[family].variants}
+        return set(self.variants)
+
     def make_plan(
         self,
         publish_targets: Iterable[TargetKey],
         changed_files: Sequence[str] = (),
+        platform: str | None = None,
     ) -> dict[str, Any]:
-        """Create the stable JSON plan consumed by CI and Bake rendering.
+        """Plan native workers and ancestors without expanding publication selection.
 
         Parameters
         ----------
         publish_targets:
-            Variants affected by a change or selected manually.
+            Explicitly selected output keys.
         changed_files:
-            Optional changed paths retained for diagnostics.
+            Diagnostic changed paths.
+        platform:
+            Optional platform filter before adding ancestors.
 
         Returns
         -------
         dict[str, Any]
-            Versioned plan containing topologically ordered build targets.
+            Deterministic v2 plan.
+
+        Raises
+        ------
+        RepositoryError
+            If the selection or platform is unsupported.
         """
-        publish_set = set(publish_targets)
-        build_set = self.build_closure(publish_set)
-        targets: list[dict[str, Any]] = []
-        for key in self.topological_order(build_set):
-            variant = self.variants[key]
-            family = self.families[variant.family]
-            targets.append(
-                {
-                    "family": variant.family,
-                    "variant": variant.identifier,
-                    "target": variant.target_name,
-                    "publish": key in publish_set and family.publish,
-                }
-            )
-        return {"schema_version": 1, "changed_files": list(changed_files), "targets": targets}
+        selected = set(publish_targets)
+        if selected - self.variants.keys():
+            raise RepositoryError("plan contains unknown targets")
+        if platform is not None and platform not in PLATFORMS:
+            raise RepositoryError(f"unsupported platform {platform}")
+        if platform:
+            selected = {key for key in selected if platform in self.families[key[0]].platforms}
+        closure = self.build_closure(selected)
+        platforms = {
+            key: ({platform} if platform else set(self.families[key[0]].platforms))
+            for key in selected
+        }
+        ordered = self.topological_order(closure)
+        for key in reversed(ordered):
+            for dependency in self.variants[key].dependencies:
+                platforms.setdefault(dependency.key, set()).update(platforms[key])
+        targets: list[dict[str, Any]] = [
+            {
+                "name": key[0],
+                "variant": key[1],
+                "target": self.variants[key].target_name,
+                "platforms": [item for item in PLATFORMS if item in platforms[key]],
+                "publish": key in selected and self.families[key[0]].publish,
+                "reason": "selected" if key in selected else "dependency",
+            }
+            for key in ordered
+        ]
+        matrix = [
+            {
+                "platform": item,
+                "platform_id": item.split("/")[1],
+                "runner": "ubuntu-24.04" if item == "linux/amd64" else "ubuntu-24.04-arm",
+            }
+            for item in PLATFORMS
+            if any(item in target["platforms"] for target in targets)
+        ]
+        return {
+            "schema_version": 2,
+            "changed_files": list(changed_files),
+            "platform": platform,
+            "targets": targets,
+            "build_matrix": {"include": matrix},
+        }
+
+    def check_plan(self, plan: Mapping[str, Any]) -> None:
+        """Reject stale, malformed or edited build plans.
+
+        Parameters
+        ----------
+        plan:
+            Candidate generated plan.
+
+        Raises
+        ------
+        RepositoryError
+            If the plan does not exactly match current manifests and selection.
+        """
+        try:
+            selected = {
+                (item["name"], item["variant"])
+                for item in plan["targets"]
+                if item["reason"] == "selected"
+            }
+            expected = self.make_plan(selected, plan["changed_files"], plan["platform"])
+        except (KeyError, TypeError) as error:
+            raise RepositoryError("malformed v2 build plan") from error
+        if plan != expected:
+            raise RepositoryError("build plan does not match current manifests")
 
     def render_bake(
         self,
@@ -656,177 +873,169 @@ class ImageRepository:
         source_repository: str | None = None,
         build_id: str | None = None,
         registry: str | None = None,
+        *,
+        platform: str,
+        github_cache: bool = False,
     ) -> dict[str, Any]:
-        """Render a Docker Buildx Bake definition for a build plan.
+        """Render one native platform of the common dependency graph.
 
         Parameters
         ----------
         plan:
-            Plan produced by :meth:`make_plan`.
+            Complete v2 plan.
         owner:
-            Container registry namespace.
+            Registry namespace.
         revision:
-            Full Git revision used for labels and immutable tags.
+            Full source SHA.
         mode:
-            One of ``load``, ``preflight``, or ``publish``.
+            Load or digest publication.
         source_repository:
-            Optional ``owner/repository`` value for the OCI source label.
+            OCI source URL or owner/repository; defaults to consumer configuration.
         build_id:
-            Optional ``run-id-attempt`` suffix distinguishing builds of one revision.
+            Run-id-attempt; required for publication.
         registry:
-            Optional registry override; otherwise use the consumer configuration.
+            Optional registry override.
+        platform:
+            Native worker platform.
+        github_cache:
+            Explicit Actions cache opt-in.
 
         Returns
         -------
         dict[str, Any]
-            JSON-serializable Bake groups and targets.
+            Bake targets and independent component groups.
 
         Raises
         ------
         RepositoryError
-            If the revision, build identifier, or requested mode is invalid.
+            If identity, plan, platform or mode is invalid.
         """
-        normalized_owner = owner.lower()
-        image_registry = registry_name(registry) if registry is not None else self.registry
+        self.check_plan(plan)
+        if mode not in ("load", "publish") or platform not in PLATFORMS:
+            raise RepositoryError("Bake requires load/publish and a native platform")
+        if mode == "publish" and build_id is None:
+            raise RepositoryError("publication requires --build-id")
         suffix = release_suffix(revision, build_id)
-        planned = {(item["family"], item["variant"]): item for item in plan["targets"]}
+        host = registry_name(registry or self.registry)
+        namespace = owner_name(owner)
         targets: dict[str, Any] = {}
-        default_targets: list[str] = []
-        for key in self.topological_order(planned):
+        keys: set[TargetKey] = set()
+        for item in plan["targets"]:
+            if platform not in item["platforms"]:
+                continue
+            key = (item["name"], item["variant"])
+            keys.add(key)
             variant = self.variants[key]
-            family = self.families[variant.family]
-            planned_item = planned[key]
-            image_path = f"{image_registry}/{normalized_owner}/{variant.family}"
-            immutable_tag = f"{image_path}:{variant.identifier}-{suffix}"
-            floating_tag = f"{image_path}:{variant.identifier}"
-            build_args = dict(variant.build_args)
-            build_args.update(
-                {
-                    "BASE_IMAGE": variant.base_reference,
-                    "IMAGE_REVISION": revision,
-                    "IMAGE_VERSION": f"{variant.identifier}-{suffix}",
-                }
-            )
+            family = self.families[key[0]]
+            version = f"{variant.identifier}-{suffix}"
+            if len(version) > 128:
+                raise RepositoryError(f"generated tag exceeds 128 characters: {version}")
+            image_path = f"{host}/{namespace}/{family.name}"
+            args = {
+                **variant.build_args,
+                "BASE_IMAGE": variant.base_reference,
+                "IMAGE_REVISION": revision.lower(),
+                "IMAGE_VERSION": version,
+            }
             if variant.mirror is not None:
-                build_args["PACKAGE_MIRROR"] = variant.mirror
+                args["PACKAGE_MIRROR"] = variant.mirror
             if variant.ssh_mode is not None:
-                build_args["SSH_MODE"] = variant.ssh_mode
+                args["SSH_MODE"] = variant.ssh_mode
             target: dict[str, Any] = {
-                "context": str(family.context.relative_to(self.root)).replace("\\", "/"),
-                "dockerfile": str(family.dockerfile.relative_to(self.root)).replace("\\", "/"),
-                "platforms": list(family.platforms),
+                "context": ".",
+                "dockerfile": family.dockerfile.relative_to(self.root).as_posix(),
+                "platforms": [platform],
                 "pull": True,
-                "args": build_args,
+                "args": args,
                 "contexts": {
                     dependency.context: f"target:{self.variants[dependency.key].target_name}"
                     for dependency in variant.dependencies
                 },
                 "labels": {
-                    "org.opencontainers.image.revision": revision,
-                    "org.opencontainers.image.version": f"{variant.identifier}-{suffix}",
-                    "org.opencontainers.image.title": variant.family,
+                    "org.opencontainers.image.revision": revision.lower(),
+                    "org.opencontainers.image.version": version,
+                    "org.opencontainers.image.title": family.name,
                 },
-                "tags": [immutable_tag],
             }
-            if source_repository:
+            source = source_repository or self.source_repository
+            if source:
                 target["labels"]["org.opencontainers.image.source"] = (
-                    source_repository
-                    if source_repository.startswith(("https://", "http://"))
-                    else f"https://github.com/{source_repository}"
+                    source
+                    if source.startswith(("https://", "http://"))
+                    else f"https://github.com/{source}"
                 )
-            if self.cache == "gha":
-                target["cache-from"] = [f"type=gha,scope={variant.family}-{variant.identifier}"]
+            scope = f"{variant.target_name}-{platform.split('/')[1]}"
+            if github_cache:
+                target["cache-from"] = [f"type=gha,scope={scope}"]
             if mode == "load":
-                target["output"] = ["type=docker"]
-                target["tags"].append(floating_tag)
-            elif mode == "preflight":
-                target["output"] = ["type=image,push=false"]
-            elif mode == "publish":
-                if planned_item["publish"]:
-                    target["output"] = ["type=registry"]
-                    if self.cache == "gha":
-                        target["cache-to"] = [
-                            f"type=gha,mode=max,scope={variant.family}-{variant.identifier}"
-                        ]
+                target.update(tags=[f"{image_path}:{version}"], output=["type=docker"])
             else:
-                raise RepositoryError(f"unsupported bake mode: {mode}")
+                target["output"] = (
+                    [
+                        f"type=image,name={image_path},push-by-digest=true,name-canonical=true,push=true"
+                    ]
+                    if item["publish"]
+                    else ["type=cacheonly"]
+                )
+                if github_cache:
+                    target["cache-to"] = [f"type=gha,mode=max,scope={scope}"]
             targets[variant.target_name] = target
-            if mode != "publish" or planned_item["publish"]:
-                default_targets.append(variant.target_name)
-        groups: dict[str, Any] = {"default": {"targets": default_targets}}
-        default_keys = {
-            key for key, item in planned.items() if mode != "publish" or bool(item["publish"])
-        }
-        for index, component in enumerate(self.component_groups(default_keys)):
+        groups = {"default": {"targets": list(targets)}}
+        for index, group in enumerate(self.component_groups(keys)):
             groups[f"component-{index}"] = {
-                "targets": [
-                    self.variants[key].target_name for key in self.topological_order(component)
-                ]
+                "targets": [self.variants[key].target_name for key in self.topological_order(group)]
             }
         return {"group": groups, "target": targets}
 
-    def select(self, family: str | None, variant: str | None) -> set[TargetKey]:
-        """Resolve a manual all, family, or variant selection.
 
-        Parameters
-        ----------
-        family:
-            Optional family name.
-        variant:
-            Optional variant identifier, valid only with ``family``.
-
-        Returns
-        -------
-        set[TargetKey]
-            Selected publish targets.
-
-        Raises
-        ------
-        RepositoryError
-            If the selection is incomplete or names an unknown target.
-        """
-        if variant and not family:
-            raise RepositoryError("--variant requires --family")
-        if family:
-            if family not in self.families:
-                raise RepositoryError(f"unknown image family: {family}")
-            if variant:
-                key = (family, variant)
-                if key not in self.variants:
-                    raise RepositoryError(f"unknown image variant: {family}/{variant}")
-                return {key}
-            return {item.key for item in self.families[family].variants}
-        return set(self.variants)
-
-
-def release_suffix(revision: str, build_id: str | None = None) -> str:
-    """Create the shared release suffix for builds, tests, and publication.
+def owner_name(value: str) -> str:
+    """Validate a registry namespace.
 
     Parameters
     ----------
-    revision:
-        Git revision containing at least twelve hexadecimal characters.
-    build_id:
-        Optional positive numeric run identifier and attempt, separated by a hyphen.
+    value:
+        Owner or organization name.
 
     Returns
     -------
     str
-        Short revision followed by the build identifier when supplied.
+        Lowercase namespace.
 
     Raises
     ------
     RepositoryError
-        If the revision or build identifier is invalid.
+        If the namespace contains invalid characters.
     """
-    short_revision = revision[:12].lower()
-    if not SHA_PATTERN.fullmatch(short_revision):
-        raise RepositoryError("revision must contain at least 12 lowercase hexadecimal characters")
-    if build_id is None:
-        return short_revision
-    if not re.fullmatch(r"[1-9][0-9]*-[1-9][0-9]*", build_id):
+    if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9-]*", value):
+        raise RepositoryError("invalid registry owner")
+    return value.lower()
+
+
+def release_suffix(revision: str, build_id: str | None = None) -> str:
+    """Create a source and build identity shared by all pipeline stages.
+
+    Parameters
+    ----------
+    revision:
+        Full forty-character Git SHA.
+    build_id:
+        Positive run-id-attempt, or None for local load/test only.
+
+    Returns
+    -------
+    str
+        Twelve-character SHA followed by the build ID or local marker.
+
+    Raises
+    ------
+    RepositoryError
+        If revision or build ID is invalid.
+    """
+    if not SHA_PATTERN.fullmatch(revision):
+        raise RepositoryError("revision must be a full forty-character Git SHA")
+    if build_id is not None and not re.fullmatch(r"[1-9][0-9]*-[1-9][0-9]*", build_id):
         raise RepositoryError("build-id must use positive numeric run-id-attempt format")
-    return f"{short_revision}-{build_id}"
+    return f"{revision[:12].lower()}-{build_id or 'local'}"
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -865,6 +1074,7 @@ def write_json(data: Mapping[str, Any], output: Path | None) -> None:
     """
     text = json.dumps(data, indent=2, sort_keys=True) + "\n"
     if output:
+        output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(text, encoding="utf-8")
     else:
         print(text, end="")

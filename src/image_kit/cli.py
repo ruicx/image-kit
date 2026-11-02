@@ -1,19 +1,25 @@
-"""Command-line interface for repository validation, planning, and publication."""
+"""One interface for v2 planning, native verification and publication."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import yaml
+
+from .publication import DIGEST, BuildIdentity, collect, merge, release
 from .repository import (
+    PLATFORMS,
     ImageRepository,
     RepositoryError,
     load_json,
+    owner_name,
     registry_name,
     release_suffix,
     write_json,
@@ -21,334 +27,335 @@ from .repository import (
 
 
 def parser() -> argparse.ArgumentParser:
-    """Build the command-line parser.
+    """Build the shared parser.
 
     Returns
     -------
     argparse.ArgumentParser
-        Configured parser for the ``images`` command.
+        Common command parser.
     """
     result = argparse.ArgumentParser(prog="images")
-    result.add_argument("--root", type=Path, default=Path.cwd(), help="repository root")
-    subcommands = result.add_subparsers(dest="command", required=True)
-
-    subcommands.add_parser("validate", help="validate all manifests and dependency edges")
-    subcommands.add_parser("list", help="list image families and variants")
-    files = subcommands.add_parser("files", help="list referenced files for repository checks")
-    files.add_argument("--kind", choices=("shell",), required=True)
-
-    plan = subcommands.add_parser("plan", help="calculate affected targets")
+    result.add_argument("--root", type=Path, default=Path.cwd())
+    commands = result.add_subparsers(dest="command", required=True)
+    commands.add_parser("validate")
+    commands.add_parser("list")
+    files = commands.add_parser("files")
+    files.add_argument("--kind", choices=["shell"], required=True)
+    plan = commands.add_parser("plan")
+    selection = plan.add_mutually_exclusive_group()
+    selection.add_argument("--all", action="store_true")
+    selection.add_argument("--family")
+    selection.add_argument("--target")
     plan.add_argument("--base")
     plan.add_argument("--head")
-    plan.add_argument("--all", action="store_true")
-    plan.add_argument("--family")
-    plan.add_argument("--variant")
-    plan.add_argument("--platform", choices=("linux/amd64", "linux/arm64"))
+    plan.add_argument("--platform", choices=PLATFORMS)
     plan.add_argument("--output", type=Path)
-
-    bake = subcommands.add_parser("bake", help="render a Docker Buildx Bake file")
-    bake.add_argument("--plan", type=Path, required=True)
-    bake.add_argument("--owner", required=True)
-    bake.add_argument("--revision", required=True)
-    bake.add_argument("--repository", help="source repository URL or GitHub owner/repository")
-    bake.add_argument("--mode", choices=("load", "preflight", "publish"), required=True)
-    bake.add_argument("--output", type=Path)
-
-    test = subcommands.add_parser("test", help="run manifest smoke tests against loaded images")
-    test.add_argument("--plan", type=Path, required=True)
-    test.add_argument("--owner", required=True)
-    test.add_argument("--revision", required=True)
-
-    build_test = subcommands.add_parser(
-        "build-test", help="build and test every independent Bake component"
-    )
-    build_test.add_argument("--plan", type=Path, required=True)
-    build_test.add_argument("--bake", type=Path, required=True)
-    build_test.add_argument("--owner", required=True)
-    build_test.add_argument("--revision", required=True)
-
-    guard = subcommands.add_parser("guard-tags", help="reject conflicting immutable tags")
-    guard.add_argument("--plan", type=Path, required=True)
-    guard.add_argument("--metadata", type=Path, required=True)
-    guard.add_argument("--owner", required=True)
-    guard.add_argument("--revision", required=True)
-    guard.add_argument("--output", type=Path, required=True)
-
-    promote = subcommands.add_parser("promote", help="update floating tags from immutable tags")
-    promote.add_argument("--plan", type=Path, required=True)
-    promote.add_argument("--owner", required=True)
-    promote.add_argument("--revision", required=True)
-    for command in (bake, test, build_test, guard, promote):
-        command.add_argument("--build-id", help="numeric run-id-attempt suffix for release tags")
-        command.add_argument(
-            "--registry", type=registry_name, help="override the configured registry"
-        )
+    plan.add_argument("--github-output", type=Path)
+    for name in ("bake", "test", "build-test", "collect", "merge", "release"):
+        command = commands.add_parser(name)
+        command.add_argument("--owner", required=True, type=owner_name)
+        command.add_argument("--registry", type=registry_name)
+        command.add_argument("--repository", help="source repository override")
+        command.add_argument("--revision", required=True)
+        command.add_argument("--build-id")
+        if name != "release":
+            command.add_argument("--plan", required=True, type=Path)
+        if name not in ("merge", "release"):
+            command.add_argument("--platform", required=True, choices=PLATFORMS)
+        if name in ("bake", "build-test"):
+            command.add_argument("--github-cache", action="store_true")
+        if name == "bake":
+            command.add_argument("--mode", required=True, choices=["load", "publish"])
+            command.add_argument("--output", type=Path)
+        if name == "build-test":
+            command.add_argument("--bake", required=True, type=Path)
+        if name == "collect":
+            command.add_argument("--metadata", required=True, type=Path)
+            command.add_argument("--output", required=True, type=Path)
+        if name == "merge":
+            command.add_argument("--digests", required=True, type=Path)
+            command.add_argument("--ref", required=True)
+            command.add_argument("--output", required=True, type=Path)
+        if name == "release":
+            command.add_argument("--publication", required=True, type=Path)
+            command.add_argument("--version", required=True)
+        if name in ("merge", "release"):
+            command.add_argument("--dry-run", action="store_true")
     return result
 
 
-def _published_items(plan: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return plan targets still marked for publication.
-
-    Parameters
-    ----------
-    plan:
-        Versioned build plan.
-
-    Returns
-    -------
-    list[dict[str, Any]]
-        Publishable target records.
-    """
-    return [item for item in plan["targets"] if item["publish"]]
-
-
-def _remote_digest(reference: str) -> str | None:
-    """Inspect a remote image reference without failing when it is absent.
-
-    Parameters
-    ----------
-    reference:
-        Fully qualified container image reference.
-
-    Returns
-    -------
-    str or None
-        Remote manifest digest, or ``None`` when inspection fails.
-    """
-    result = subprocess.run(
-        [
-            "docker",
-            "buildx",
-            "imagetools",
-            "inspect",
-            reference,
-            "--format",
-            "{{.Manifest.Digest}}",
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    return result.stdout.strip() if result.returncode == 0 else None
-
-
-def _guard_tags(args: argparse.Namespace, plan: dict[str, Any]) -> None:
-    """Filter existing matching tags and reject immutable tag conflicts.
-
-    Parameters
-    ----------
-    args:
-        Parsed ``guard-tags`` arguments.
-    plan:
-        Build plan to filter for publication.
-
-    Raises
-    ------
-    RepositoryError
-        If local digest metadata is missing or a remote digest conflicts.
-    """
-    metadata = load_json(args.metadata)
-    suffix = release_suffix(args.revision, args.build_id)
-    # Copy through JSON because plan records are intentionally JSON-compatible data.
-    filtered = json.loads(json.dumps(plan))
-    for item in filtered["targets"]:
-        if not item["publish"]:
-            continue
-        reference = (
-            f"{args.registry}/{args.owner.lower()}/{item['family']}:{item['variant']}-{suffix}"
-        )
-        remote = _remote_digest(reference)
-        if remote is None:
-            continue
-        local = metadata.get(item["target"], {}).get("containerimage.digest")
-        if not local:
-            raise RepositoryError(f"missing local digest metadata for {item['target']}")
-        if remote != local:
-            raise RepositoryError(
-                f"immutable tag conflict for {reference}: remote={remote}, local={local}"
-            )
-        item["publish"] = False
-        print(f"immutable tag already exists with matching digest; skipping: {reference}")
-    write_json(filtered, args.output)
-
-
-def _promote(args: argparse.Namespace, plan: dict[str, Any]) -> None:
-    """Point floating variant tags at their immutable release tags.
-
-    Parameters
-    ----------
-    args:
-        Parsed ``promote`` arguments.
-    plan:
-        Successfully published build plan.
-    """
-    suffix = release_suffix(args.revision, args.build_id)
-    for item in _published_items(plan):
-        prefix = f"{args.registry}/{args.owner.lower()}/{item['family']}"
-        immutable = f"{prefix}:{item['variant']}-{suffix}"
-        floating = f"{prefix}:{item['variant']}"
-        subprocess.run(
-            ["docker", "buildx", "imagetools", "create", "--tag", floating, immutable],
-            check=True,
-        )
-
-
-def _run_tests(repo: ImageRepository, args: argparse.Namespace, plan: dict[str, Any]) -> None:
-    """Run manifest-declared smoke tests against locally loaded images.
+def _run_tests(repo: ImageRepository, args: argparse.Namespace, plan: Mapping[str, Any]) -> None:
+    """Run native contracts and aggregate failures.
 
     Parameters
     ----------
     repo:
-        Loaded repository model.
+        Loaded repository.
     args:
-        Parsed command arguments containing owner, revision, and build identifier.
+        Native platform and image identity.
     plan:
-        Plan whose targets should be tested.
+        Validated plan or internally selected component.
+
+    Raises
+    ------
+    RepositoryError
+        If Docker or a required smoke test fails.
     """
     suffix = release_suffix(args.revision, args.build_id)
+    failed: list[str] = []
     for item in plan["targets"]:
-        variant = repo.variants[(item["family"], item["variant"])]
-        image = (
-            f"{args.registry}/{args.owner.lower()}/{variant.family}:{variant.identifier}-{suffix}"
-        )
-        for script_name in variant.tests:
-            script = repo.root / script_name
-            print(f"testing {image} with {script_name}")
-            subprocess.run(
-                ["docker", "run", "--rm", "--entrypoint", "/bin/bash", image, "-s"],
-                input=script.read_text(encoding="utf-8"),
-                text=True,
-                check=True,
+        if args.platform not in item["platforms"]:
+            continue
+        variant = repo.variants[(item["name"], item["variant"])]
+        image = f"{args.registry}/{args.owner}/{item['name']}:{item['variant']}-{suffix}"
+        for test in variant.tests:
+            script = repo.path(test.script)
+            command = [
+                "docker",
+                "run",
+                "--rm",
+                "--pull=never",
+                "--env",
+                f"SMOKE_HARD_GATE={'1' if test.policy == 'required' else '0'}",
+                "--mount",
+                f"type=bind,source={script.parent},target=/tmp/smoke,readonly",
+            ]
+            source = f"source {shlex.quote('/tmp/smoke/' + script.name)}"
+            if test.library:
+                source = (
+                    f"source {shlex.quote('/tmp/smoke/' + Path(test.library).name)} && {source}"
+                )
+            if test.entrypoint == "bash":
+                command.extend(["--entrypoint", "/bin/bash", image, "-c", source])
+            else:
+                command.extend([image, "bash", "-lc", source])
+            print(
+                f"Testing {item['name']}/{item['variant']} on {args.platform}: {test.script}",
+                flush=True,
             )
+            if subprocess.run(command, check=False).returncode:
+                failed.append(f"{item['name']}/{item['variant']}:{test.script}")
+    if failed:
+        raise RepositoryError(f"smoke execution failed: {', '.join(failed)}")
 
 
-def _build_and_test_components(
-    repo: ImageRepository, args: argparse.Namespace, plan: dict[str, Any]
-) -> None:
-    """Build and test every independent graph component.
-
-    A failed component is recorded while unrelated components continue, which
-    preserves diagnostic coverage for repositories with multiple image graphs.
+def _build_test(repo: ImageRepository, args: argparse.Namespace, plan: Mapping[str, Any]) -> None:
+    """Validate and build independent components, retaining diagnostics after failures.
 
     Parameters
     ----------
     repo:
-        Loaded repository model.
+        Loaded repository.
     args:
-        Parsed ``build-test`` arguments.
+        Native identity and Bake file.
     plan:
-        Complete build plan.
+        Complete validated plan.
 
     Raises
     ------
     RepositoryError
-        If one or more components fail to build or pass smoke tests.
+        If the Bake file differs or a component fails.
     """
     bake = load_json(args.bake)
-    groups = sorted(name for name in bake.get("group", {}) if name.startswith("component-"))
+    expected = repo.render_bake(
+        plan,
+        args.owner,
+        args.revision,
+        "load",
+        args.repository,
+        args.build_id,
+        args.registry,
+        platform=args.platform,
+        github_cache=args.github_cache,
+    )
+    if bake != expected:
+        raise RepositoryError("Bake file does not match the current plan and worker identity")
     failures: list[str] = []
-    # Continue after a component failure to preserve diagnostics for unrelated graphs.
-    for group in groups:
-        target_names = set(bake["group"][group]["targets"])
-        component_plan = dict(plan)
-        component_plan["targets"] = [
-            item for item in plan["targets"] if item["target"] in target_names
-        ]
-        print(f"building independent graph component: {group}")
+    for group, value in bake["group"].items():
+        if not group.startswith("component-"):
+            continue
         try:
             subprocess.run(
-                ["docker", "buildx", "bake", "--file", str(args.bake), group],
-                check=True,
+                ["docker", "buildx", "bake", "--file", str(args.bake), group], check=True
             )
+            component_plan = {
+                **plan,
+                "targets": [item for item in plan["targets"] if item["target"] in value["targets"]],
+            }
             _run_tests(repo, args, component_plan)
-        except subprocess.CalledProcessError:
+        except (subprocess.CalledProcessError, RepositoryError):
             failures.append(group)
     if failures:
         raise RepositoryError(f"build or smoke tests failed for: {', '.join(failures)}")
 
 
+def _verify_tested_images(
+    plan: Mapping[str, Any],
+    metadata: Mapping[str, Any],
+    identity: BuildIdentity,
+    platform: str,
+) -> None:
+    """Require exported images to match the native images loaded for smoke tests.
+
+    Parameters
+    ----------
+    plan:
+        Validated complete plan.
+    metadata:
+        Digest-export Bake metadata.
+    identity:
+        Shared native build identity.
+    platform:
+        Native worker platform.
+
+    Raises
+    ------
+    RepositoryError
+        If publication re-solving changed a tested image or metadata is incomplete.
+    subprocess.CalledProcessError
+        If a tested image is no longer available locally.
+    """
+    identity.validate()
+    suffix = release_suffix(identity.revision, identity.build_id)
+    for item in plan["targets"]:
+        if not item["publish"] or platform not in item["platforms"]:
+            continue
+        config = metadata.get(item["target"], {}).get("containerimage.config.digest", "")
+        if not isinstance(config, str) or not DIGEST.fullmatch(config):
+            raise RepositoryError(f"missing config digest for tested image: {item['target']}")
+        reference = identity.image(item["name"], f"{item['variant']}-{suffix}")
+        tested = subprocess.check_output(
+            ["docker", "image", "inspect", reference, "--format", "{{.Id}}"], text=True
+        ).strip()
+        if config != tested:
+            raise RepositoryError(f"publication image differs from the tested image: {reference}")
+
+
 def run(arguments: Sequence[str] | None = None) -> int:
-    """Execute one CLI command.
+    """Execute one command using the shared repository model.
 
     Parameters
     ----------
     arguments:
-        Optional argument sequence. ``None`` reads from ``sys.argv``.
+        Optional arguments; None uses sys.argv.
 
     Returns
     -------
     int
-        Zero when the command completes successfully.
+        Zero on success.
+
+    Raises
+    ------
+    RepositoryError
+        If build or publication contracts are invalid.
+    subprocess.CalledProcessError
+        If a Git or Docker operation fails.
     """
     args = parser().parse_args(arguments)
-    repo = ImageRepository(args.root).load()
+    repo = ImageRepository(args.root)
     if hasattr(args, "registry"):
         args.registry = args.registry or repo.registry
+        args.repository = args.repository or repo.source_repository
+        args.revision = args.revision.lower()
+        release_suffix(args.revision, args.build_id)
+    if args.command == "release":
+        identity = BuildIdentity(
+            args.registry, args.owner, args.repository or "", args.revision, args.build_id
+        )
+        release(load_json(args.publication), identity, args.version, dry_run=args.dry_run)
+        return 0
+    repo.load()
     if args.command == "validate":
-        print(f"validated {len(repo.families)} families and {len(repo.variants)} variants")
+        print(
+            f"Validated {len(repo.families)} images and {len(repo.variants)} variants (schema v2)"
+        )
     elif args.command == "list":
-        for family in repo.families.values():
-            print(f"{family.name}: {family.description}")
-            for variant in family.variants:
-                base_mode = "pinned" if variant.base_digest is not None else "tag-tracking"
-                dependencies = (
-                    ", ".join(f"{item.family}/{item.variant}" for item in variant.dependencies)
-                    or "none"
-                )
-                print(f"  {variant.identifier} (base: {base_mode}, dependencies: {dependencies})")
+        for key in repo.topological_order():
+            print(f"{key[0]}/{key[1]} ({', '.join(repo.families[key[0]].platforms)})")
     elif args.command == "files":
         for path in repo.shell_files():
             print(path.relative_to(repo.root).as_posix())
     elif args.command == "plan":
-        if args.all or args.family:
-            targets = repo.select(args.family, args.variant)
-            changed: list[str] = []
-        else:
-            if not args.base or not args.head:
-                raise RepositoryError(
-                    "plan requires --base and --head unless --all/--family is used"
-                )
+        changed: list[str] = []
+        if args.all or args.family or args.target:
+            if args.base or args.head:
+                raise RepositoryError("explicit selection cannot be combined with --base/--head")
+            selected = repo.select(args.family, args.target)
+        elif args.base and args.head:
             changed = repo.changed_files(args.base, args.head)
-            targets = repo.affected(changed)
-        if args.platform:
-            targets = {key for key in targets if args.platform in repo.families[key[0]].platforms}
-        write_json(repo.make_plan(targets, changed), args.output)
-    elif args.command == "bake":
+            selected = repo.affected(changed)
+        else:
+            raise RepositoryError(
+                "plan requires --all, --family, --target, or both --base and --head"
+            )
+        plan = repo.make_plan(selected, changed, args.platform)
+        write_json(plan, args.output)
+        if args.github_output:
+            with args.github_output.open("a", encoding="utf-8") as output:
+                output.write(f"has_build={'true' if plan['targets'] else 'false'}\n")
+                output.write(f"build_matrix={json.dumps(plan['build_matrix'])}\n")
+    else:
         plan = load_json(args.plan)
-        write_json(
-            repo.render_bake(
-                plan,
-                args.owner,
-                args.revision,
-                args.mode,
-                source_repository=args.repository,
-                build_id=args.build_id,
-                registry=args.registry,
-            ),
-            args.output,
-        )
-    elif args.command == "test":
-        _run_tests(repo, args, load_json(args.plan))
-    elif args.command == "build-test":
-        _build_and_test_components(repo, args, load_json(args.plan))
-    elif args.command == "guard-tags":
-        _guard_tags(args, load_json(args.plan))
-    elif args.command == "promote":
-        _promote(args, load_json(args.plan))
+        repo.check_plan(plan)
+        if args.command == "bake":
+            write_json(
+                repo.render_bake(
+                    plan,
+                    args.owner,
+                    args.revision,
+                    args.mode,
+                    args.repository,
+                    args.build_id,
+                    args.registry,
+                    platform=args.platform,
+                    github_cache=args.github_cache,
+                ),
+                args.output,
+            )
+        elif args.command == "test":
+            _run_tests(repo, args, plan)
+        elif args.command == "build-test":
+            _build_test(repo, args, plan)
+        else:
+            identity = BuildIdentity(
+                args.registry, args.owner, args.repository or "", args.revision, args.build_id
+            )
+            if args.command == "collect":
+                metadata = load_json(args.metadata)
+                _verify_tested_images(plan, metadata, identity, args.platform)
+                write_json(collect(plan, metadata, identity, args.platform), args.output)
+            elif args.command == "merge":
+                receipt = merge(
+                    plan,
+                    [load_json(path) for path in sorted(args.digests.glob("*.json"))],
+                    identity,
+                    args.ref,
+                    dry_run=args.dry_run,
+                )
+                if receipt is not None:
+                    write_json(receipt, args.output)
     return 0
 
 
 def main() -> int:
-    """Run the CLI with consistent user-facing error handling.
+    """Translate operational failures into command exit status two.
 
     Returns
     -------
     int
-        Process exit status: zero on success and two on an operational error.
+        Zero on success or two for an operational error.
     """
     try:
         return run()
-    except (RepositoryError, subprocess.CalledProcessError) as error:
+    except (
+        RepositoryError,
+        OSError,
+        ValueError,
+        KeyError,
+        TypeError,
+        subprocess.CalledProcessError,
+        yaml.YAMLError,
+    ) as error:
         print(f"images: error: {error}", file=sys.stderr)
         return 2
 

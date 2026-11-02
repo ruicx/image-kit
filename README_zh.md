@@ -18,10 +18,11 @@ English documentation: [README.md](README.md)
 | `assets/` | 入口脚本、公共 Python 开发依赖和配置。 |
 | `tests/` | Python 引擎测试、不执行安装的参数检查及依赖检查回归测试。 |
 
-镜像清单、Dockerfile、镜像专用依赖、冒烟脚本、账号/文档检查、工作流权限和发布策略由消费
-仓库维护。Python 包无需父 images 仓库或本地 `schemas/` 目录即可运行。当前支持
-family/variant v1 契约，每个镜像族使用一个原生平台；其他现有格式（包括 Luciole 的清单）
-需要先显式迁移，再接入引擎。
+镜像清单、Dockerfile、软件选择、账号/文档检查和 CI 权限由消费者维护。image-kit 0.2
+使用同一份 v2 schema、仓库模型和 CLI，支持单变体、多变体及原生多平台镜像。YAML `name`
+决定发布包名，不要求与目录名相同。构建标签记录 variant、源码 SHA 和工作流批次；正式版本从
+已验证发布收据提升，不重新构建。详见英文[清单契约](docs/manifest-reference.md)、
+[CLI 参考](docs/cli-reference.md)和 [v2 迁移说明](docs/migration-v2.md)。
 
 ## 安装与运行
 
@@ -44,13 +45,12 @@ uv run images --root /path/to/image-repository plan --all --output build-plan.js
 ```toml
 [tool.image-kit]
 registry = "ghcr.io"
-cache = "gha"
+source-repository = "example/images"
 rebuild-inputs = [".gitmodules", "vendor/image-kit", "tools/**"]
 shell-inputs = ["vendor/image-kit/tests/*.sh"]
 ```
 
-注册表默认为 `ghcr.io`，相关命令可通过 `--registry` 覆盖。GitHub Actions 以外的环境省略
-`cache`。`.dockerignore`、`pyproject.toml`、`uv.lock` 和 `.github/workflows/**` 始终触发重建；
+注册表默认为 `ghcr.io`，相关命令可通过 `--registry` 覆盖。通过 `--github-cache` 显式启用 Actions 缓存，本地构建省略该选项。`.dockerignore`、`pyproject.toml`、`uv.lock` 和 `.github/workflows/**` 始终触发重建；
 `rebuild-inputs` 添加消费端路径。shell 校验覆盖清单输入、冒烟脚本及 `shell-inputs`。
 组件不假定特定子模块路径。uv 消费端声明 `image-kit` 依赖，并在 `[tool.uv.sources]` 中配置
 可编辑路径，再运行 `uv sync`。本项目与消费仓库分别保留自己的 `uv.lock`；CI 使用

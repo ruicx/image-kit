@@ -32,14 +32,15 @@ def variant(identifier: str, dependencies: list[dict[str, str]] | None = None) -
     return {
         "id": identifier,
         "base": {
-            "image": "ubuntu:24.04",
-            "digest": "sha256:" + "a" * 64,
-        },
+            "target": f"{dependencies[0]['family']}/{dependencies[0]['variant']}",
+            "context": dependencies[0]["context"],
+        }
+        if dependencies
+        else {"image": "ubuntu:24.04", "digest": "sha256:" + "a" * 64},
         "build_args": {},
         "mirror": "upstream",
         "runtime": {"ssh": {"mode": "disabled"}},
-        "dependencies": dependencies or [],
-        "tests": ["src/demo/tests/smoke.sh"],
+        "tests": [{"script": "src/demo/tests/smoke.sh"}],
     }
 
 
@@ -59,7 +60,7 @@ def manifest(name: str, variants: list[dict[str, Any]]) -> dict[str, Any]:
         Mutable family manifest data.
     """
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "name": name,
         "description": f"{name} image",
         "dockerfile": f"src/{name}/Dockerfile",
@@ -88,13 +89,24 @@ def write_family(root: Path, name: str, data: dict[str, Any]) -> None:
     (directory / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
     (directory / "tests" / "smoke.sh").write_text("#!/bin/bash\n", encoding="utf-8")
     for item in data["variants"]:
-        item["tests"] = [f"src/{name}/tests/smoke.sh"]
+        item["tests"] = [{"script": f"src/{name}/tests/smoke.sh"}]
     (directory / "image.yml").write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 
 
 @pytest.fixture
 def repo_root(tmp_path: Path) -> Path:
-    """Create a consumer repository with explicit rebuild input configuration."""
+    """Create a consumer repository with explicit rebuild input configuration.
+
+    Parameters
+    ----------
+    tmp_path:
+        Value used by this operation.
+
+    Returns
+    -------
+    Path
+        Create a consumer repository with explicit rebuild input configuration.
+    """
     (tmp_path / "pyproject.toml").write_text(
         '[tool.image-kit]\nrebuild-inputs = ["tools/**", ".gitmodules", "vendor/image-kit"]\n',
         encoding="utf-8",
@@ -103,7 +115,13 @@ def repo_root(tmp_path: Path) -> Path:
 
 
 def test_loads_valid_repository(repo_root: Path) -> None:
-    """Load a repository whose manifest and files satisfy all contracts."""
+    """Load a repository whose manifest and files satisfy all contracts.
+
+    Parameters
+    ----------
+    repo_root:
+        Temporary consumer repository root.
+    """
     write_family(repo_root, "demo", manifest("demo", [variant("24.04")]))
     repository = ImageRepository(repo_root).load()
     assert list(repository.families) == ["demo"]
@@ -125,7 +143,11 @@ def test_generic_repository_needs_no_local_schema_or_runtime_policy(tmp_path: Pa
     assert run(["--root", str(tmp_path), "validate"]) == 0
     repository = ImageRepository(tmp_path).load()
     bake = repository.render_bake(
-        repository.make_plan(repository.variants), "example", "1" * 40, "load"
+        repository.make_plan(repository.variants),
+        "example",
+        "1" * 40,
+        "load",
+        platform="linux/amd64",
     )
     target = next(iter(bake["target"].values()))
     assert "SSH_MODE" not in target["args"]
@@ -154,12 +176,16 @@ def test_registry_and_cache_are_consumer_configuration(repo_root: Path) -> None:
         "1" * 40,
         "publish",
         source_repository="https://git.example.com/team/images",
+        platform="linux/amd64",
+        build_id="123-1",
+        github_cache=True,
     )
     target = next(iter(bake["target"].values()))
-    assert target["tags"] == ["registry.example.com:5000/example/demo:one-111111111111"]
-    assert target["cache-to"] == ["type=gha,mode=max,scope=demo-one"]
-    assert target["labels"]["org.opencontainers.image.source"] == (
-        "https://git.example.com/team/images"
+    assert "push-by-digest=true" in target["output"][0]
+    assert "tags" not in target
+    assert target["cache-to"] == ["type=gha,mode=max,scope=demo--one-amd64"]
+    assert (
+        target["labels"]["org.opencontainers.image.source"] == "https://git.example.com/team/images"
     )
 
 
@@ -215,15 +241,21 @@ def test_platform_selection_preserves_build_dependencies(repo_root: Path, platfo
         == 0
     )
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
-    families = [item["family"] for item in plan["targets"]]
+    families = [item["name"] for item in plan["targets"]]
     assert families == (["base", "child"] if platform == "linux/arm64" else ["other"])
     repository = ImageRepository(repo_root).load()
-    bake = repository.render_bake(plan, "example", "1" * 40, "load")
+    bake = repository.render_bake(plan, "example", "1" * 40, "load", platform=platform)
     assert all(target["platforms"] == [platform] for target in bake["target"].values())
 
 
 def test_platform_plan_retains_unselected_ancestor(repo_root: Path) -> None:
-    """Keep an ARM64 ancestor private when only its consumer is selected for publication."""
+    """Keep an ARM64 ancestor private when only its consumer is selected for publication.
+
+    Parameters
+    ----------
+    repo_root:
+        Temporary consumer repository root.
+    """
     dependency = {"context": "base", "family": "base", "variant": "one"}
     for name, dependencies in [("base", None), ("child", [dependency])]:
         data = manifest(name, [variant("one", dependencies)])
@@ -244,7 +276,7 @@ def test_platform_plan_retains_unselected_ancestor(repo_root: Path) -> None:
         ]
     )
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
-    assert [(item["family"], item["publish"]) for item in plan["targets"]] == [
+    assert [(item["name"], item["publish"]) for item in plan["targets"]] == [
         ("base", False),
         ("child", True),
     ]
@@ -264,9 +296,17 @@ def test_platform_plan_retains_unselected_ancestor(repo_root: Path) -> None:
     assert json.loads(plan_path.read_text(encoding="utf-8"))["targets"] == []
 
 
-@pytest.mark.parametrize("platforms", [[], ["linux/ppc64le"], ["linux/amd64", "linux/arm64"]])
+@pytest.mark.parametrize("platforms", [[], ["linux/ppc64le"], ["linux/amd64", "linux/amd64"]])
 def test_rejects_unsupported_platform_sets(repo_root: Path, platforms: list[str]) -> None:
-    """Reject platform sets that cannot use the native single-platform load workflow."""
+    """Reject platform sets that cannot use the native single-platform load workflow.
+
+    Parameters
+    ----------
+    repo_root:
+        Temporary consumer repository root.
+    platforms:
+        Candidate platform list.
+    """
     data = manifest("demo", [variant("one")])
     data["platforms"] = platforms
     write_family(repo_root, "demo", data)
@@ -275,19 +315,33 @@ def test_rejects_unsupported_platform_sets(repo_root: Path, platforms: list[str]
 
 
 def test_rejects_cross_platform_internal_dependencies(repo_root: Path) -> None:
-    """Prevent architecture-filtered jobs from requiring a foreign-platform build ancestor."""
+    """Prevent architecture-filtered jobs from requiring a foreign-platform build ancestor.
+
+    Parameters
+    ----------
+    repo_root:
+        Temporary consumer repository root.
+    """
     write_family(repo_root, "base", manifest("base", [variant("one")]))
     dependency = {"context": "base", "family": "base", "variant": "one"}
     data = manifest("child", [variant("one", [dependency])])
     data["platforms"] = ["linux/arm64"]
     write_family(repo_root, "child", data)
-    with pytest.raises(RepositoryError, match="platform mismatch"):
+    with pytest.raises(RepositoryError, match="support its platforms"):
         ImageRepository(repo_root).load()
 
 
 @pytest.mark.parametrize("blank_style", ["null", "empty"])
 def test_accepts_explicitly_unpinned_base_digest(repo_root: Path, blank_style: str) -> None:
-    """Accept both YAML spellings that explicitly select tag tracking."""
+    """Accept both YAML spellings that explicitly select tag tracking.
+
+    Parameters
+    ----------
+    repo_root:
+        Temporary consumer repository root.
+    blank_style:
+        YAML spelling of an explicit null digest.
+    """
     item = variant("tracking")
     item["base"]["digest"] = None
     write_family(repo_root, "demo", manifest("demo", [item]))
@@ -295,15 +349,20 @@ def test_accepts_explicitly_unpinned_base_digest(repo_root: Path, blank_style: s
     if blank_style == "empty":
         serialized = manifest_path.read_text(encoding="utf-8")
         manifest_path.write_text(serialized.replace("digest: null", "digest:"), encoding="utf-8")
-
     repository = ImageRepository(repo_root).load()
-    loaded = repository.variants[("demo", "tracking")]
+    loaded = repository.variants["demo", "tracking"]
     assert loaded.base_digest is None
     assert loaded.base_reference == "ubuntu:24.04"
 
 
 def test_requires_base_digest_key(repo_root: Path) -> None:
-    """Reject omission of the digest key even though its value may be null."""
+    """Reject omission of the digest key even though its value may be null.
+
+    Parameters
+    ----------
+    repo_root:
+        Temporary consumer repository root.
+    """
     item = variant("one")
     del item["base"]["digest"]
     write_family(repo_root, "demo", manifest("demo", [item]))
@@ -313,15 +372,24 @@ def test_requires_base_digest_key(repo_root: Path) -> None:
 
 @pytest.mark.parametrize(
     ("field", "value", "message"),
-    [
-        ("id", "latest", "latest"),
-        ("digest", "sha256:nope", "does not match"),
-    ],
+    [("id", "latest", "latest"), ("digest", "sha256:nope", "does not match")],
 )
 def test_schema_rejects_invalid_release_inputs(
     repo_root: Path, field: str, value: str, message: str
 ) -> None:
-    """Reject release identifiers and digests that violate the JSON Schema."""
+    """Reject release identifiers and digests that violate the JSON Schema.
+
+    Parameters
+    ----------
+    repo_root:
+        Temporary consumer repository root.
+    field:
+        Manifest field being exercised.
+    value:
+        Invalid field value.
+    message:
+        Expected validation diagnostic.
+    """
     item = variant("24.04")
     if field == "digest":
         item["base"][field] = value
@@ -333,7 +401,13 @@ def test_schema_rejects_invalid_release_inputs(
 
 
 def test_requires_explicit_base_tag(repo_root: Path) -> None:
-    """Reject an external base image without an explicit version tag."""
+    """Reject an external base image without an explicit version tag.
+
+    Parameters
+    ----------
+    repo_root:
+        Temporary consumer repository root.
+    """
     item = variant("one")
     item["base"]["image"] = "ubuntu"
     write_family(repo_root, "demo", manifest("demo", [item]))
@@ -342,7 +416,13 @@ def test_requires_explicit_base_tag(repo_root: Path) -> None:
 
 
 def test_rejects_secret_like_build_arguments(repo_root: Path) -> None:
-    """Reject build-argument keys that appear to contain secrets."""
+    """Reject build-argument keys that appear to contain secrets.
+
+    Parameters
+    ----------
+    repo_root:
+        Temporary consumer repository root.
+    """
     item = variant("one")
     item["build_args"] = {"API_TOKEN": "must-not-be-here"}
     write_family(repo_root, "demo", manifest("demo", [item]))
@@ -351,7 +431,13 @@ def test_rejects_secret_like_build_arguments(repo_root: Path) -> None:
 
 
 def test_accepts_custom_default_user_and_renders_ssh_mode(repo_root: Path) -> None:
-    """Accept a named default user and pass its explicit SSH mode to Bake."""
+    """Accept a named default user and pass its explicit SSH mode to Bake.
+
+    Parameters
+    ----------
+    repo_root:
+        Temporary consumer repository root.
+    """
     item = variant("one")
     item["build_args"] = {
         "DEFAULT_USER": "builder",
@@ -363,7 +449,7 @@ def test_accepts_custom_default_user_and_renders_ssh_mode(repo_root: Path) -> No
     write_family(repo_root, "demo", manifest("demo", [item]))
     repository = ImageRepository(repo_root).load()
     plan = repository.make_plan({("demo", "one")})
-    bake = repository.render_bake(plan, "example", "1" * 40, "load")
+    bake = repository.render_bake(plan, "example", "1" * 40, "load", platform="linux/amd64")
     target = next(iter(bake["target"].values()))
     assert target["args"]["DEFAULT_USER"] == "builder"
     assert target["args"]["DEFAULT_GROUPS"] == "video,render"
@@ -372,14 +458,26 @@ def test_accepts_custom_default_user_and_renders_ssh_mode(repo_root: Path) -> No
 
 
 def test_rejects_duplicate_variant(repo_root: Path) -> None:
-    """Reject duplicate variant identifiers within one family."""
+    """Reject duplicate variant identifiers within one family.
+
+    Parameters
+    ----------
+    repo_root:
+        Temporary consumer repository root.
+    """
     write_family(repo_root, "demo", manifest("demo", [variant("one"), variant("one")]))
     with pytest.raises(RepositoryError, match="duplicate variant"):
         ImageRepository(repo_root).load()
 
 
 def test_rejects_unknown_dependency(repo_root: Path) -> None:
-    """Reject an internal dependency that does not identify a known target."""
+    """Reject an internal dependency that does not identify a known target.
+
+    Parameters
+    ----------
+    repo_root:
+        Temporary consumer repository root.
+    """
     dependency = {"context": "base", "family": "missing", "variant": "one"}
     write_family(repo_root, "demo", manifest("demo", [variant("one", [dependency])]))
     with pytest.raises(RepositoryError, match="unknown target missing/one"):
@@ -387,64 +485,84 @@ def test_rejects_unknown_dependency(repo_root: Path) -> None:
 
 
 def test_rejects_dependency_cycle(repo_root: Path) -> None:
-    """Reject a dependency graph containing a cycle."""
+    """Reject a dependency graph containing a cycle.
+
+    Parameters
+    ----------
+    repo_root:
+        Temporary consumer repository root.
+    """
     one_dep = {"context": "two", "family": "demo", "variant": "two"}
     two_dep = {"context": "one", "family": "demo", "variant": "one"}
     write_family(
-        repo_root,
-        "demo",
-        manifest("demo", [variant("one", [one_dep]), variant("two", [two_dep])]),
+        repo_root, "demo", manifest("demo", [variant("one", [one_dep]), variant("two", [two_dep])])
     )
     with pytest.raises(RepositoryError, match="contains a cycle"):
         ImageRepository(repo_root).load()
 
 
 def test_change_propagates_to_dependents_and_bake_uses_target_context(repo_root: Path) -> None:
-    """Propagate base changes and connect consumers to same-build targets."""
+    """Propagate base changes and connect consumers to same-build targets.
+
+    Parameters
+    ----------
+    repo_root:
+        Temporary consumer repository root.
+    """
     write_family(repo_root, "base", manifest("base", [variant("one")]))
     dependency = {"context": "internal_base", "family": "base", "variant": "one"}
     child = manifest("child", [variant("one", [dependency])])
     child["variants"][0]["tests"] = ["src/child/tests/smoke.sh"]
     write_family(repo_root, "child", child)
     repository = ImageRepository(repo_root).load()
-
     affected = repository.affected(["src/base/Dockerfile"])
     assert affected == {("base", "one"), ("child", "one")}
     plan = repository.make_plan(affected)
-    bake = repository.render_bake(plan, "Example", "1" * 40, "load")
-    child_target = repository.variants[("child", "one")].target_name
-    base_target = repository.variants[("base", "one")].target_name
+    bake = repository.render_bake(plan, "Example", "1" * 40, "load", platform="linux/amd64")
+    child_target = repository.variants["child", "one"].target_name
+    base_target = repository.variants["base", "one"].target_name
     assert bake["target"][child_target]["contexts"]["internal_base"] == f"target:{base_target}"
 
 
 def test_tags_use_family_variant_and_short_revision(repo_root: Path) -> None:
-    """Generate immutable and floating tags from the release contract."""
+    """Generate immutable and floating tags from the release contract.
+
+    Parameters
+    ----------
+    repo_root:
+        Temporary consumer repository root.
+    """
     write_family(repo_root, "demo", manifest("demo", [variant("24.04")]))
     repository = ImageRepository(repo_root).load()
     plan = repository.make_plan({("demo", "24.04")})
-    bake = repository.render_bake(plan, "Example", "abcdef012345" + "0" * 28, "load")
+    bake = repository.render_bake(
+        plan, "Example", "abcdef012345" + "0" * 28, "load", platform="linux/amd64"
+    )
     target = next(iter(bake["target"].values()))
-    assert target["tags"] == [
-        "ghcr.io/example/demo:24.04-abcdef012345",
-        "ghcr.io/example/demo:24.04",
-    ]
+    assert target["tags"] == ["ghcr.io/example/demo:24.04-abcdef012345-local"]
     assert target["args"]["BASE_IMAGE"] == "ubuntu:24.04@sha256:" + "a" * 64
 
 
 def test_bake_tracks_base_tag_when_digest_is_null(repo_root: Path) -> None:
-    """Pass only the exact base tag to BuildKit for an unpinned variant."""
+    """Pass only the exact base tag to BuildKit for an unpinned variant.
+
+    Parameters
+    ----------
+    repo_root:
+        Temporary consumer repository root.
+    """
     item = variant("tracking")
     item["base"]["digest"] = None
     write_family(repo_root, "demo", manifest("demo", [item]))
     repository = ImageRepository(repo_root).load()
     plan = repository.make_plan({("demo", "tracking")})
-    bake = repository.render_bake(plan, "example", "1" * 40, "load")
+    bake = repository.render_bake(plan, "example", "1" * 40, "load", platform="linux/amd64")
     target = next(iter(bake["target"].values()))
     assert target["args"]["BASE_IMAGE"] == "ubuntu:24.04"
     assert target["pull"] is True
 
 
-@pytest.mark.parametrize("mode", ["load", "preflight", "publish"])
+@pytest.mark.parametrize("mode", ["load", "publish"])
 def test_rebuilds_have_distinct_tags_and_preserve_revision(repo_root: Path, mode: str) -> None:
     """Distinguish workflow runs and attempts while preserving source attribution.
 
@@ -461,15 +579,20 @@ def test_rebuilds_have_distinct_tags_and_preserve_revision(repo_root: Path, mode
     revision = "abcdef012345" + "0" * 28
     tags = []
     for build_id in ("123-1", "123-2", "124-1"):
-        bake = repository.render_bake(plan, "Example", revision, mode, build_id=build_id)
+        bake = repository.render_bake(
+            plan, "Example", revision, mode, build_id=build_id, platform="linux/amd64"
+        )
         target = next(iter(bake["target"].values()))
         version = f"24.04-abcdef012345-{build_id}"
-        assert target["tags"][0] == f"ghcr.io/example/demo:{version}"
+        if mode == "load":
+            assert target["tags"][0] == f"ghcr.io/example/demo:{version}"
+        else:
+            assert "tags" not in target
         assert target["labels"]["org.opencontainers.image.revision"] == revision
         assert target["labels"]["org.opencontainers.image.version"] == version
         assert target["args"]["IMAGE_VERSION"] == version
         assert target["pull"] is True
-        tags.append(target["tags"][0])
+        tags.append(version)
     assert len(set(tags)) == 3
 
 
@@ -486,106 +609,31 @@ def test_rejects_invalid_build_identifier(build_id: str) -> None:
         release_suffix("1" * 40, build_id)
 
 
-@pytest.mark.parametrize("remote_digest", [None, "sha256:matching", "sha256:conflicting"])
-@pytest.mark.parametrize("registry", ["ghcr.io", "registry.example.com:5000"])
-def test_release_commands_share_build_tags_and_guard_conflicts(
-    repo_root: Path, monkeypatch: pytest.MonkeyPatch, remote_digest: str | None, registry: str
-) -> None:
-    """Use one release identity for smoke tests, conflict checks, and promotion.
+def test_independent_graph_branches_get_separate_bake_groups(repo_root: Path) -> None:
+    """Place disconnected image graphs in independent Bake groups.
 
     Parameters
     ----------
     repo_root:
-        Temporary repository using the packaged schema.
-    monkeypatch:
-        Fixture replacing Docker calls with recorded responses.
-    remote_digest:
-        Missing, matching, or conflicting registry manifest digest.
-    registry:
-        Registry used consistently for rendering, testing, guarding, and promotion.
+        Temporary consumer repository root.
     """
-    write_family(repo_root, "demo", manifest("demo", [variant("24.04")]))
-    repository = ImageRepository(repo_root).load()
-    plan = repository.make_plan({("demo", "24.04")})
-    plan_path = repo_root / "plan.json"
-    metadata_path = repo_root / "metadata.json"
-    output_path = repo_root / "publish.json"
-    bake_path = repo_root / "bake.json"
-    plan_path.write_text(json.dumps(plan), encoding="utf-8")
-    metadata_path.write_text(
-        json.dumps({plan["targets"][0]["target"]: {"containerimage.digest": "sha256:matching"}}),
-        encoding="utf-8",
-    )
-    calls: list[list[str]] = []
-
-    def docker_run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
-        """Record Docker invocations and return the configured registry response.
-
-        Parameters
-        ----------
-        command:
-            Docker command and arguments.
-        **kwargs:
-            Subprocess execution options.
-
-        Returns
-        -------
-        subprocess.CompletedProcess[str]
-            Simulated Docker process result.
-        """
-        calls.append(command)
-        missing = "inspect" in command and remote_digest is None
-        return subprocess.CompletedProcess(command, 1 if missing else 0, stdout=remote_digest or "")
-
-    monkeypatch.setattr("image_kit.cli.subprocess.run", docker_run)
-    prefix = ["--root", str(repo_root)]
-    options = [
-        "--plan",
-        str(plan_path),
-        "--owner",
-        "Example",
-        "--revision",
-        "1" * 40,
-        "--build-id",
-        "123-2",
-        "--registry",
-        registry,
-    ]
-    expected_image = f"{registry}/example/demo:24.04-111111111111-123-2"
-    assert run([*prefix, "bake", *options, "--mode", "load", "--output", str(bake_path)]) == 0
-    bake = json.loads(bake_path.read_text(encoding="utf-8"))
-    assert next(iter(bake["target"].values()))["tags"][0] == expected_image
-    assert run([*prefix, "build-test", *options, "--bake", str(bake_path)]) == 0
-    assert expected_image in calls[-1]
-    assert run([*prefix, "test", *options]) == 0
-    assert expected_image in calls[-1]
-    guard_options = ["--metadata", str(metadata_path), "--output", str(output_path)]
-    if remote_digest == "sha256:conflicting":
-        with pytest.raises(RepositoryError, match="immutable tag conflict"):
-            run([*prefix, "guard-tags", *options, *guard_options])
-        assert not output_path.exists()
-    else:
-        assert run([*prefix, "guard-tags", *options, *guard_options]) == 0
-        filtered = json.loads(output_path.read_text(encoding="utf-8"))
-        assert filtered["targets"][0]["publish"] is (remote_digest is None)
-    assert expected_image in calls[-1]
-    assert run([*prefix, "promote", *options]) == 0
-    assert calls[-1][-2:] == [f"{registry}/example/demo:24.04", expected_image]
-
-
-def test_independent_graph_branches_get_separate_bake_groups(repo_root: Path) -> None:
-    """Place disconnected image graphs in independent Bake groups."""
     write_family(repo_root, "one", manifest("one", [variant("base")]))
     write_family(repo_root, "two", manifest("two", [variant("base")]))
     repository = ImageRepository(repo_root).load()
     plan = repository.make_plan(set(repository.variants))
-    bake = repository.render_bake(plan, "example", "1" * 40, "load")
+    bake = repository.render_bake(plan, "example", "1" * 40, "load", platform="linux/amd64")
     component_groups = [name for name in bake["group"] if name.startswith("component-")]
     assert len(component_groups) == 2
 
 
 def test_infrastructure_changes_affect_all_but_docs_do_not(repo_root: Path) -> None:
-    """Apply global rebuild rules without rebuilding for unrelated docs."""
+    """Apply global rebuild rules without rebuilding for unrelated docs.
+
+    Parameters
+    ----------
+    repo_root:
+        Temporary consumer repository root.
+    """
     write_family(repo_root, "demo", manifest("demo", [variant("one"), variant("two")]))
     repository = ImageRepository(repo_root).load()
     assert repository.affected(["tools/check_policy.py"]) == set(repository.variants)
@@ -597,7 +645,13 @@ def test_infrastructure_changes_affect_all_but_docs_do_not(repo_root: Path) -> N
 
 
 def test_missing_submodule_input_reports_initialization_command(repo_root: Path) -> None:
-    """Explain how to initialize missing shared inputs after a plain clone."""
+    """Explain how to initialize missing shared inputs after a plain clone.
+
+    Parameters
+    ----------
+    repo_root:
+        Temporary consumer repository root.
+    """
     data = manifest("demo", [variant("one")])
     data["inputs"] = ["vendor/example/scripts/dev/cmake.sh"]
     write_family(repo_root, "demo", data)
@@ -606,7 +660,13 @@ def test_missing_submodule_input_reports_initialization_command(repo_root: Path)
 
 
 def test_gitlink_change_rebuilds_all_variants(repo_root: Path) -> None:
-    """Rebuild all images when Git reports only a changed component commit."""
+    """Rebuild all images when Git reports only a changed component commit.
+
+    Parameters
+    ----------
+    repo_root:
+        Temporary consumer repository root.
+    """
     write_family(repo_root, "one", manifest("one", [variant("base")]))
     write_family(repo_root, "two", manifest("two", [variant("base")]))
     commands = [

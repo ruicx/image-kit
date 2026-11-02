@@ -45,12 +45,16 @@ mutable state. Preserve unrelated working-tree changes and keep edits scoped to 
 - Preserve CLI entry points (`images`, `image-kit`, and `python -m image_kit`), exit statuses,
   versioned plan fields, schema semantics, and published tag behavior unless intentionally
   changing a documented compatibility contract.
-- Schema version 1 currently uses family/variant manifests and one native platform per family.
-  Reject dependency cycles, undeclared targets, and cross-platform internal dependencies.
+- image-kit 0.2 accepts only manifest and plan schema v2. Keep one schema/model/CLI;
+  do not retain format dispatch or a second repository implementation. YAML names are explicit
+  and independent of directories. Internal bases use target/context and parent platform coverage.
+- Consumer account, Dockerfile wiring and documentation policies remain outside the engine.
+  Smoke helper paths are declared in manifests; do not assume a consumer directory or owner.
 - Keep schema resources and `py.typed` in built wheels. Validate packaging changes with a
   non-editable installation and a consumer that has no local schema or component checkout.
-- Keep registry and cache choices configurable. Never embed credentials or introduce a global
-  `latest` tag. Preserve immutable published tags.
+- Keep registry and source defaults configurable; Actions cache is explicit. Publish variant
+  channels, batch-qualified build tags and receipt-based variant releases. Never overwrite
+  conflicting immutable tags, create global latest/main/bare-SHA aliases or embed credentials.
 - Installation scripts use capability names, English comments, `set -euo pipefail`, and GNU
   `getopt` for parameters. Provide `--help` and return 64 for invalid usage. Verify downloaded
   binaries before installation; any exception needs explicit approval and consumer documentation.
@@ -85,3 +89,7 @@ Use commit subjects `<Type>: <summary>`, where Type is `Feat`, `BugFix`, `Refact
 Follow the subject with a blank line and a numbered body. Commit component changes separately
 from consumer pin updates; make component commits available upstream before consumers record
 their new submodule pins. Do not automatically follow a moving component branch in consumer CI.
+
+## Unified v2 publication
+
+Use the shared v2 plan and derived native worker matrix. Validate/build/test before digest publication; merge checks all required workers and the full identity before updating tags. Formal versions promote a verified main receipt without rebuilding or creating Git tags. Keep component publication before consumer pin commits. Docs are English-only; README pairs remain bilingual.

@@ -19,11 +19,13 @@ image repositories.
 | `assets/` | Entrypoints, common Python development requirements, and configuration. |
 | `tests/` | Python engine tests, non-installing argument checks, and dependency-check regressions. |
 
-Image manifests, Dockerfiles, image-specific requirements, smoke scripts, account/documentation
-checks, workflow permissions, and publication policies belong to consuming repositories. The
-Python package runs without a parent images checkout or a local `schemas/` directory. It supports
-the family/variant v1 contract and one native platform per family; other existing manifest
-formats, including Luciole's, need an explicit migration before using the engine.
+Image manifests, Dockerfiles, software selections, account/documentation checks and CI permissions
+belong to consumers. image-kit 0.2 uses one schema v2, repository model and CLI for single-variant,
+multi-variant and native multi-platform images. YAML `name` is the published package name,
+independent of the directory. Build tags identify the variant, source SHA and workflow batch;
+formal releases promote verified publication receipts without rebuilding. See the
+[manifest contract](docs/manifest-reference.md), [CLI reference](docs/cli-reference.md) and
+[v2 migration](docs/migration-v2.md).
 
 ## Install and run
 
@@ -47,13 +49,12 @@ Consumer defaults belong in its `pyproject.toml`, for example:
 ```toml
 [tool.image-kit]
 registry = "ghcr.io"
-cache = "gha"
+source-repository = "example/images"
 rebuild-inputs = [".gitmodules", "vendor/image-kit", "tools/**"]
 shell-inputs = ["vendor/image-kit/tests/*.sh"]
 ```
 
-The registry defaults to `ghcr.io`; registry commands accept `--registry` overrides. Omit `cache`
-outside GitHub Actions. `.dockerignore`, `pyproject.toml`, `uv.lock`, and `.github/workflows/**` always trigger
+The registry defaults to `ghcr.io`; registry commands accept `--registry` overrides. Enable Actions caches only through `--github-cache`; omit that option for local builds. `.dockerignore`, `pyproject.toml`, `uv.lock`, and `.github/workflows/**` always trigger
 rebuilds; `rebuild-inputs` adds consumer paths. Shell validation includes manifest inputs and
 smoke scripts plus `shell-inputs`. The component does not assume a particular submodule path.
 For uv consumers, declare `image-kit` as a dependency and use an editable path in
