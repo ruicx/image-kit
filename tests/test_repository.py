@@ -663,6 +663,58 @@ def test_independent_graph_branches_get_separate_bake_groups(repo_root: Path) ->
     assert len(component_groups) == 2
 
 
+def test_native_workers_isolate_components_and_keep_ancestors(repo_root: Path) -> None:
+    """Keep a parent and child together while isolating unrelated native builds.
+
+    Parameters
+    ----------
+    repo_root:
+        Temporary consumer repository root.
+    """
+    write_family(repo_root, "base", manifest("base", [variant("one")]))
+    write_family(
+        repo_root,
+        "child",
+        manifest(
+            "child",
+            [variant("one", [{"family": "base", "variant": "one", "context": "base"}])],
+        ),
+    )
+    write_family(repo_root, "other", manifest("other", [variant("one")]))
+    repository = ImageRepository(repo_root).load()
+    plan = repository.make_plan({("child", "one"), ("other", "one")})
+    workers = plan["build_matrix"]["include"]
+    assert [worker["worker_id"] for worker in workers] == [
+        "amd64-component-0",
+        "amd64-component-1",
+    ]
+    covered: list[str] = []
+    for worker in workers:
+        bake = repository.render_bake(
+            plan,
+            "example",
+            "a" * 40,
+            "publish",
+            build_id="123-1",
+            platform=worker["platform"],
+            component=worker["component"],
+        )
+        names = list(bake["target"])
+        covered.extend(names)
+        if "child--one" in names:
+            assert set(names) == {"base--one", "child--one"}
+            assert bake["target"]["base--one"]["output"] == ["type=cacheonly"]
+            assert bake["target"]["child--one"]["contexts"] == {
+                "base": "target:base--one"
+            }
+        else:
+            assert names == ["other--one"]
+        assert bake["group"][worker["component"]]["targets"] == names
+    assert sorted(covered) == ["base--one", "child--one", "other--one"]
+    with pytest.raises(RepositoryError, match="unknown native component"):
+        repository.worker_targets(plan, "linux/amd64", "component-99")
+
+
 def test_infrastructure_changes_affect_all_but_docs_do_not(repo_root: Path) -> None:
     """Apply global rebuild rules without rebuilding for unrelated docs.
 

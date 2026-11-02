@@ -13,7 +13,14 @@ from typing import Any
 
 import yaml
 
-from .publication import DIGEST, BuildIdentity, collect, merge, release
+from .publication import (
+    DIGEST,
+    BuildIdentity,
+    collect,
+    image_config_digest,
+    merge,
+    release,
+)
 from .repository import (
     PLATFORMS,
     ImageRepository,
@@ -62,6 +69,7 @@ def parser() -> argparse.ArgumentParser:
             command.add_argument("--plan", required=True, type=Path)
         if name not in ("merge", "release"):
             command.add_argument("--platform", required=True, choices=PLATFORMS)
+            command.add_argument("--component", help="generated native component ID")
         if name in ("bake", "build-test"):
             command.add_argument("--github-cache", action="store_true")
         if name == "bake":
@@ -175,6 +183,7 @@ def _build_test(
         args.registry,
         platform=args.platform,
         github_cache=args.github_cache,
+        component=args.component,
     )
     if bake != expected:
         raise RepositoryError(
@@ -235,14 +244,15 @@ def _verify_tested_images(
     for item in plan["targets"]:
         if not item["publish"] or platform not in item["platforms"]:
             continue
-        config = metadata.get(item["target"], {}).get(
-            "containerimage.config.digest", ""
-        )
-        if not isinstance(config, str) or not DIGEST.fullmatch(config):
+        digest = metadata.get(item["target"], {}).get("containerimage.digest", "")
+        if not isinstance(digest, str) or not DIGEST.fullmatch(digest):
             raise RepositoryError(
-                f"missing config digest for tested image: {item['target']}"
+                f"missing or invalid digest metadata: {item['target']}"
             )
         reference = identity.image(item["name"], f"{item['variant']}-{suffix}")
+        config = image_config_digest(
+            f"{reference.rsplit(':', 1)[0]}@{digest}", platform
+        )
         tested = subprocess.check_output(
             ["docker", "image", "inspect", reference, "--format", "{{.Id}}"], text=True
         ).strip()
@@ -339,11 +349,19 @@ def run(arguments: Sequence[str] | None = None) -> int:
                     args.registry,
                     platform=args.platform,
                     github_cache=args.github_cache,
+                    component=args.component,
                 ),
                 args.output,
             )
         elif args.command == "test":
-            _run_tests(repo, args, plan)
+            _run_tests(
+                repo,
+                args,
+                {
+                    **plan,
+                    "targets": repo.worker_targets(plan, args.platform, args.component),
+                },
+            )
         elif args.command == "build-test":
             _build_test(repo, args, plan)
         else:
@@ -355,6 +373,10 @@ def run(arguments: Sequence[str] | None = None) -> int:
                 args.build_id,
             )
             if args.command == "collect":
+                plan = {
+                    **plan,
+                    "targets": repo.worker_targets(plan, args.platform, args.component),
+                }
                 metadata = load_json(args.metadata)
                 _verify_tested_images(plan, metadata, identity, args.platform)
                 write_json(

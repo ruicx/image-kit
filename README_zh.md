@@ -1,5 +1,9 @@
 # image-kit
 
+原生 CI 按依赖组件和平台生成独立 worker。各 worker 命令传入生成的 `--component`，
+产物名称使用 `worker_id`。收集 digest 时读取 registry 中已推送的原生 manifest，
+将其配置摘要与本地烟测镜像比较，通过后才允许更新最终标签。
+
 为独立镜像仓库提供清单驱动的容器构建工具、共享安装能力与资源。
 
 English documentation: [README.md](README.md)

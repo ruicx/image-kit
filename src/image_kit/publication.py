@@ -153,6 +153,110 @@ def collect(
     }
 
 
+def _registry_json(reference: str, *, config: bool = False) -> dict[str, Any]:
+    """Read a registry manifest or config without pulling image layers.
+
+    Parameters
+    ----------
+    reference:
+        Content-addressed registry reference.
+    config:
+        Read image configuration instead of the raw manifest.
+
+    Returns
+    -------
+    dict[str, Any]
+        Parsed registry document.
+
+    Raises
+    ------
+    RepositoryError
+        If the response is not a JSON object.
+    subprocess.CalledProcessError
+        If registry access fails.
+    """
+    options = ["--format", "{{json .Image}}"] if config else ["--raw"]
+    value = json.loads(
+        subprocess.check_output(
+            ["docker", "buildx", "imagetools", "inspect", reference, *options],
+            text=True,
+        )
+    )
+    if not isinstance(value, dict):
+        raise RepositoryError(f"invalid registry document: {reference}")
+    return value
+
+
+def image_config_digest(reference: str, platform: str) -> str:
+    """Resolve a published native config through its immutable registry digest.
+
+    Parameters
+    ----------
+    reference:
+        Image repository followed by an immutable SHA-256 digest.
+    platform:
+        Expected native platform.
+
+    Returns
+    -------
+    str
+        Configuration digest of the uniquely matched runnable image.
+
+    Raises
+    ------
+    RepositoryError
+        If the digest, platform, manifest or configuration is invalid or ambiguous.
+    subprocess.CalledProcessError
+        If a registry read fails.
+
+    Notes
+    -----
+    Attestation manifests are excluded. Direct single-platform manifests and
+    OCI indexes or Docker manifest lists are accepted without pulling layers.
+    """
+    image, separator, digest = reference.rpartition("@")
+    if not separator or not image or not DIGEST.fullmatch(digest):
+        raise RepositoryError("config verification requires an immutable image digest")
+    if platform not in PLATFORMS:
+        raise RepositoryError(f"unsupported platform: {platform}")
+    document = _registry_json(reference)
+    if document.get("mediaType") in (
+        "application/vnd.oci.image.index.v1+json",
+        "application/vnd.docker.distribution.manifest.list.v2+json",
+    ):
+        matches = [
+            item
+            for item in document.get("manifests", [])
+            if item.get("annotations", {}).get("vnd.docker.reference.type")
+            != "attestation-manifest"
+            and f"{item.get('platform', {}).get('os')}/"
+            f"{item.get('platform', {}).get('architecture')}"
+            == platform
+        ]
+        if len(matches) != 1 or not DIGEST.fullmatch(str(matches[0].get("digest", ""))):
+            raise RepositoryError(
+                f"expected one runnable {platform} manifest: {reference}"
+            )
+        reference = f"{image}@{matches[0]['digest']}"
+        document = _registry_json(reference)
+    if document.get("mediaType") not in (
+        "application/vnd.oci.image.manifest.v1+json",
+        "application/vnd.docker.distribution.manifest.v2+json",
+    ):
+        raise RepositoryError(f"unsupported native image manifest: {reference}")
+    digest = document.get("config", {}).get("digest", "")
+    if not isinstance(digest, str) or not DIGEST.fullmatch(digest):
+        raise RepositoryError(
+            f"missing config digest in registry manifest: {reference}"
+        )
+    config = _registry_json(reference, config=True)
+    if f"{config.get('os')}/{config.get('architecture')}" != platform:
+        raise RepositoryError(
+            f"registry image config does not match {platform}: {reference}"
+        )
+    return digest
+
+
 def _inspect(reference: str, *, missing_ok: bool = False) -> dict[str, Any] | None:
     """Read a registry descriptor and distinguish missing tags from lookup failures.
 

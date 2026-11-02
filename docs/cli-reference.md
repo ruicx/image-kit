@@ -29,6 +29,14 @@ and `build_matrix.include`. A target records `name`, `variant`, normalized Bake 
 required `platforms`, `publish`, and `reason` (`selected` or `dependency`). Workers map amd64 to
 `ubuntu-24.04` and arm64 to `ubuntu-24.04-arm`. No QEMU is configured.
 
+The matrix has one row per independent dependency component and native platform. Each row
+includes `platform`, `platform_id`, `runner`, `component` and a unique `worker_id` such as
+`arm64-component-0`. Pass its `--component` to `bake`, `build-test`, `test` and `collect` while
+retaining the complete plan. Internal ancestors stay in the same worker; unrelated components
+do not share loaded images or BuildKit storage. Omitting `--component` retains local execution
+of all components for the chosen platform. Component identifiers are local to a generated plan.
+Name worker artifacts with `worker_id` and the run attempt to avoid same-platform collisions.
+
 Before using a plan, the engine reconstructs it from current manifests and rejects missing
 ancestors, changed platforms or edited publication flags. `build-test` also compares the Bake
 file with the current plan and identity before invoking Docker.
@@ -57,9 +65,15 @@ across multiple tags are sequential, not transactional. Pin a final index digest
 
 ## Artifacts and promotion
 
-Before collection, the CLI compares each exported `containerimage.config.digest` with the
-Docker config ID of its loaded smoke-test image. A missing or changed image fails the worker,
-preventing a second solve from publishing different runtime content under a verified tag.
+Before collection, the CLI reads the immutable `containerimage.digest` from Bake metadata,
+resolves the unique runnable platform manifest in the registry index, and reads its
+`config.digest`. Direct single-platform manifests are also supported; attestation manifests
+are excluded and the image config's OS/architecture is checked. Registry reads use
+`docker buildx imagetools inspect` without pulling layers. The published config must match
+the Docker config ID of the loaded smoke-test image; the current native workflows use Docker's
+classic image store. A missing, ambiguous or changed image, malformed response or registry
+error fails the worker. The optional Bake metadata field `containerimage.config.digest` is
+not required. Git revisions identify source commits; registry digests identify image content.
 
 Native digest artifacts have `schema_version: 2`, `kind: native-digests`, an `identity`, and
 `digests`. Identity records registry, owner, source repository, full revision and build ID.

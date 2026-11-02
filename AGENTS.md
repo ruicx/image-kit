@@ -96,4 +96,9 @@ their new submodule pins. Do not automatically follow a moving component branch 
 
 ## Unified v2 publication
 
+Derive native workers from dependency components and platforms; retain the full validated plan
+for merge, pass `--component` to worker commands and qualify artifacts with `worker_id` and
+run attempt. Resolve published configs from immutable registry manifests, excluding attestations
+and requiring the expected platform; do not require optional Buildx config-digest metadata.
+
 Use the shared v2 plan and derived native worker matrix. Validate/build/test before digest publication; merge checks all required workers and the full identity before updating tags. Formal versions promote a verified main receipt without rebuilding or creating Git tags. Keep component publication before consumer pin commits. Docs are English-only; README pairs remain bilingual.

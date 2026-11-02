@@ -27,6 +27,11 @@ formal releases promote verified publication receipts without rebuilding. See th
 [manifest contract](docs/manifest-reference.md), [CLI reference](docs/cli-reference.md) and
 [v2 migration](docs/migration-v2.md).
 
+Native CI workers are derived per dependency component and platform. Pass the generated
+`--component` to worker commands and use `worker_id` in artifact names. Digest collection
+reads the published native manifest from the registry and compares its config digest with
+the loaded smoke-test image before final tags can advance.
+
 ## Install and run
 
 Requires uv, Python 3.11+, Git, and Docker Buildx for image operations. Install the checked-out

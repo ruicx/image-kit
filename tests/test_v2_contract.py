@@ -498,7 +498,7 @@ def test_collect_accepts_only_the_tested_image(
     monkeypatch:
         Local Docker image inspection replacement.
     config:
-        Exported config digest, or None for missing metadata.
+        Registry config digest, or None for a malformed registry manifest.
     """
     plan = consumer.make_plan(consumer.select(target="app/stack"))
     path = consumer.root / "plan.json"
@@ -509,7 +509,6 @@ def test_collect_accepts_only_the_tested_image(
             {
                 "app--stack": {
                     "containerimage.digest": "sha256:" + "d" * 64,
-                    "containerimage.config.digest": config,
                 }
             }
         ),
@@ -533,6 +532,16 @@ def test_collect_accepts_only_the_tested_image(
             Loaded config digest.
         """
         calls.append(command)
+        if command[1:4] == ["buildx", "imagetools", "inspect"]:
+            assert command[4] == "ghcr.io/example/app@sha256:" + "d" * 64
+            return json.dumps(
+                {"os": "linux", "architecture": "arm64"}
+                if "--format" in command
+                else {
+                    "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                    "config": {"digest": config},
+                }
+            )
         assert command == [
             "docker",
             "image",
@@ -567,10 +576,108 @@ def test_collect_accepts_only_the_tested_image(
     if config == "sha256:" + "b" * 64:
         assert run(command) == 0
         assert json.loads(output.read_text())["digests"][0]["name"] == "app"
-        assert len(calls) == 1
+        assert len(calls) == 3
     else:
         with pytest.raises(
             RepositoryError, match="differs from the tested|missing config digest"
         ):
             run(command)
         assert not output.exists()
+
+
+def test_worker_commands_build_test_and_collect_only_the_assigned_component(
+    consumer: ImageRepository, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Preserve the full plan while isolating build, smoke and digest collection.
+
+    Parameters
+    ----------
+    consumer:
+        Consumer with a native parent and child.
+    monkeypatch:
+        Docker and registry process replacements.
+    """
+    folder = consumer.root / "src/independent"
+    folder.mkdir()
+    raw = yaml.safe_load(
+        (consumer.root / "src/core/image.yml").read_text(encoding="utf-8")
+    )
+    raw["name"] = "other"
+    (folder / "image.yml").write_text(yaml.safe_dump(raw), encoding="utf-8")
+    consumer.load()
+    plan = consumer.make_plan(consumer.variants)
+    path = consumer.root / "plan.json"
+    path.write_text(json.dumps(plan), encoding="utf-8")
+    bake = consumer.root / "bake.json"
+    common = [
+        "--plan",
+        str(path),
+        "--owner",
+        "example",
+        "--revision",
+        "a" * 40,
+        "--build-id",
+        "123-2",
+        "--platform",
+        "linux/arm64",
+        "--component",
+        "component-1",
+    ]
+    prefix = ["--root", str(consumer.root)]
+    assert run([*prefix, "bake", *common, "--mode", "load", "--output", str(bake)]) == 0
+    assert set(json.loads(bake.read_text())["target"]) == {"other--stack"}
+    calls: list[list[str]] = []
+
+    def docker(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        """Capture worker build and smoke invocations.
+
+        Parameters
+        ----------
+        command:
+            Docker command vector.
+        **kwargs:
+            Subprocess options.
+
+        Returns
+        -------
+        subprocess.CompletedProcess[str]
+            Successful worker operation.
+        """
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(subprocess, "run", docker)
+    assert run([*prefix, "build-test", *common, "--bake", str(bake)]) == 0
+    assert calls[0][-1] == "component-1"
+    assert len(calls) == 2
+    assert any("/other:stack-" in item for item in calls[1])
+    metadata = consumer.root / "metadata.json"
+    metadata.write_text(
+        json.dumps({"other--stack": {"containerimage.digest": "sha256:" + "d" * 64}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "image_kit.cli.image_config_digest", lambda *args: "sha256:" + "b" * 64
+    )
+    monkeypatch.setattr(
+        subprocess, "check_output", lambda *args, **kwargs: "sha256:" + "b" * 64
+    )
+    output = consumer.root / "digests.json"
+    assert (
+        run(
+            [
+                *prefix,
+                "collect",
+                *common,
+                "--metadata",
+                str(metadata),
+                "--output",
+                str(output),
+            ]
+        )
+        == 0
+    )
+    records = json.loads(output.read_text())["digests"]
+    assert [(item["name"], item["platform"]) for item in records] == [
+        ("other", "linux/arm64")
+    ]

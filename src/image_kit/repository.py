@@ -868,12 +868,20 @@ class ImageRepository:
             {
                 "platform": item,
                 "platform_id": item.split("/")[1],
+                "component": f"component-{index}",
+                "worker_id": f"{item.split('/')[1]}-component-{index}",
                 "runner": "ubuntu-24.04"
                 if item == "linux/amd64"
                 else "ubuntu-24.04-arm",
             }
             for item in PLATFORMS
-            if any(item in target["platforms"] for target in targets)
+            for index, _ in enumerate(
+                self.component_groups(
+                    (target["name"], target["variant"])
+                    for target in targets
+                    if item in target["platforms"]
+                )
+            )
         ]
         return {
             "schema_version": 2,
@@ -908,6 +916,45 @@ class ImageRepository:
         if plan != expected:
             raise RepositoryError("build plan does not match current manifests")
 
+    def worker_targets(
+        self, plan: Mapping[str, Any], platform: str, component: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Select one native component without changing publication flags.
+
+        Parameters
+        ----------
+        plan:
+            Complete, previously validated build plan.
+        platform:
+            Native architecture assigned to the worker.
+        component:
+            Generated component identifier, or None for every native target.
+
+        Returns
+        -------
+        list[dict[str, Any]]
+            Ordered targets including every internal ancestor in the component.
+
+        Raises
+        ------
+        RepositoryError
+            If the platform or component is unknown.
+        """
+        if platform not in PLATFORMS:
+            raise RepositoryError(f"unsupported platform: {platform}")
+        targets = [item for item in plan["targets"] if platform in item["platforms"]]
+        if component is None:
+            return targets
+        groups = self.component_groups(
+            (item["name"], item["variant"]) for item in targets
+        )
+        for index, group in enumerate(groups):
+            if component == f"component-{index}":
+                return [
+                    item for item in targets if (item["name"], item["variant"]) in group
+                ]
+        raise RepositoryError(f"unknown native component: {platform}/{component}")
+
     def render_bake(
         self,
         plan: Mapping[str, Any],
@@ -920,6 +967,7 @@ class ImageRepository:
         *,
         platform: str,
         github_cache: bool = False,
+        component: str | None = None,
     ) -> dict[str, Any]:
         """Render one native platform of the common dependency graph.
 
@@ -943,6 +991,8 @@ class ImageRepository:
             Native worker platform.
         github_cache:
             Explicit Actions cache opt-in.
+        component:
+            Optional generated native component assigned to this worker.
 
         Returns
         -------
@@ -964,9 +1014,7 @@ class ImageRepository:
         namespace = owner_name(owner)
         targets: dict[str, Any] = {}
         keys: set[TargetKey] = set()
-        for item in plan["targets"]:
-            if platform not in item["platforms"]:
-                continue
+        for item in self.worker_targets(plan, platform, component):
             key = (item["name"], item["variant"])
             keys.add(key)
             variant = self.variants[key]
@@ -1029,7 +1077,7 @@ class ImageRepository:
             targets[variant.target_name] = target
         groups = {"default": {"targets": list(targets)}}
         for index, group in enumerate(self.component_groups(keys)):
-            groups[f"component-{index}"] = {
+            groups[component or f"component-{index}"] = {
                 "targets": [
                     self.variants[key].target_name
                     for key in self.topological_order(group)

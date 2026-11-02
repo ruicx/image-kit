@@ -11,7 +11,14 @@ from typing import Any
 
 import pytest
 
-from image_kit.publication import BuildIdentity, _inspect, collect, merge, release
+from image_kit.publication import (
+    BuildIdentity,
+    _inspect,
+    collect,
+    image_config_digest,
+    merge,
+    release,
+)
 from image_kit.repository import RepositoryError
 
 
@@ -257,6 +264,102 @@ def mutations(registry: Registry) -> list[list[str]]:
         for command in registry.commands
         if "create" in command and "--dry-run" not in command
     ]
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        "index",
+        "docker-list",
+        "direct",
+        "missing",
+        "duplicate",
+        "wrong-config",
+        "no-config",
+    ],
+)
+def test_registry_config_resolves_native_manifest(
+    monkeypatch: pytest.MonkeyPatch, shape: str
+) -> None:
+    """Resolve immutable native configs while excluding provenance descriptors.
+
+    Parameters
+    ----------
+    monkeypatch:
+        Registry subprocess replacement.
+    shape:
+        Registry document shape or corruption.
+    """
+    image = "registry.example:5000/example/demo"
+    outer = "sha256:" + "a" * 64
+    native = "sha256:" + "b" * 64
+    config = "sha256:" + "c" * 64
+    descriptor = {
+        "digest": native,
+        "platform": {"os": "linux", "architecture": "arm64"},
+    }
+    descriptors = [] if shape == "missing" else [descriptor]
+    if shape == "duplicate":
+        descriptors.append(descriptor)
+    # Even a misleading platform label must not select an attestation.
+    descriptors.append(
+        {
+            **descriptor,
+            "digest": "sha256:" + "d" * 64,
+            "annotations": {"vnd.docker.reference.type": "attestation-manifest"},
+        }
+    )
+    index = {
+        "mediaType": "application/vnd.docker.distribution.manifest.list.v2+json"
+        if shape == "docker-list"
+        else "application/vnd.oci.image.index.v1+json",
+        "manifests": descriptors,
+    }
+    manifest = {
+        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+        "config": {} if shape == "no-config" else {"digest": config},
+    }
+    calls: list[list[str]] = []
+
+    def inspect(command: list[str], **kwargs: Any) -> str:
+        """Return only the selected content-addressed registry documents.
+
+        Parameters
+        ----------
+        command:
+            Registry inspection command.
+        **kwargs:
+            Subprocess options.
+
+        Returns
+        -------
+        str
+            Simulated JSON response.
+        """
+        calls.append(command)
+        assert command[:4] == ["docker", "buildx", "imagetools", "inspect"]
+        assert command[4] in (f"{image}@{outer}", f"{image}@{native}")
+        if command[-1] == "--raw":
+            return json.dumps(
+                index if command[4].endswith(outer) and shape != "direct" else manifest
+            )
+        assert command[-2:] == ["--format", "{{json .Image}}"]
+        return json.dumps(
+            {
+                "os": "linux",
+                "architecture": "amd64" if shape == "wrong-config" else "arm64",
+            }
+        )
+
+    monkeypatch.setattr(subprocess, "check_output", inspect)
+    if shape in ("index", "docker-list", "direct"):
+        assert image_config_digest(f"{image}@{outer}", "linux/arm64") == config
+        assert len(calls) == (2 if shape == "direct" else 3)
+    else:
+        with pytest.raises(
+            RepositoryError, match="expected one|does not match|missing config"
+        ):
+            image_config_digest(f"{image}@{outer}", "linux/arm64")
 
 
 def test_merge_preserves_provenance_and_is_idempotent(

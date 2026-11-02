@@ -21,7 +21,9 @@ before recording new consumer pins. CI must initialize reviewed pins recursively
 Luciole CUDA manifests use `pytorch26.06-py3`; this is the NVIDIA PyTorch image version, not
 the CUDA toolkit version. Luciole Ascend uses its vendor-stack variant ID. utils/images retains
 its existing variant IDs and all consumers retain package names. Luciole smoke tests explicitly
-retain image entrypoints and helper-based assertion policy; utils tests retain a Bash override.
+retain CUDA image entrypoints and helper-based assertion policy. Root Ascend tests use a Bash
+override and explicitly exercise the real vendor entrypoint and SSH modes; utils tests retain
+a Bash override.
 
 The migration directly switches publication rules. Old registry tags and artifacts are not
 deleted, but subsequent builds do not maintain the old global aliases. Update active pulls,
@@ -36,7 +38,10 @@ Version promotion is a separate manual workflow selecting the successful main ru
 and desired v-prefixed semantic version. It downloads that attempt's publication receipt,
 checks the source workflow, and promotes existing registry digests without rebuilding.
 
-Digest collection also checks that exported configs match the loaded smoke-test image IDs;
+Native workers are split by dependency component and platform. Pass the generated `component`
+to worker commands and use `worker_id` in artifact names; retain the full plan for merge.
+Digest collection resolves configs from immutable registry manifests and checks that they
+match the loaded smoke-test image IDs;
 a changed second solve cannot advance public tags. Validation includes schema/model, planning,
 native Bake, smoke invocation, artifact corruption,
 immutable conflicts, provenance indexes and promotion tests; consumer policies; Ruff/ty; locked
