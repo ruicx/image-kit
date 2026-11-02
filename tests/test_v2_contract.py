@@ -585,6 +585,135 @@ def test_collect_accepts_only_the_tested_image(
         assert not output.exists()
 
 
+@pytest.mark.parametrize("failure", [None, "metadata", "pull", "tag", "smoke"])
+def test_published_smoke_uses_exported_image(
+    consumer: ImageRepository, monkeypatch: pytest.MonkeyPatch, failure: str | None
+) -> None:
+    """Retest changed exports and reject invalid metadata or Docker failures.
+
+    Parameters
+    ----------
+    consumer:
+        Consumer with an unpublished parent and a selected child.
+    monkeypatch:
+        Docker and registry replacements.
+    failure:
+        Publication stage to fail, or None for a verified changed export.
+    """
+    plan = consumer.make_plan(consumer.select(target="app/stack"))
+    path = consumer.root / "plan.json"
+    path.write_text(json.dumps(plan), encoding="utf-8")
+    metadata = consumer.root / "metadata.json"
+    metadata.write_text(
+        json.dumps(
+            {
+                "app--stack": {
+                    "containerimage.digest": "bad"
+                    if failure == "metadata"
+                    else "sha256:" + "d" * 64
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    reference = "ghcr.io/example/app:stack-aaaaaaaaaaaa-123-2"
+    immutable = "ghcr.io/example/app@sha256:" + "d" * 64
+    calls: list[list[str]] = []
+    local_config = "sha256:" + "b" * 64
+
+    def docker(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        """Model loading a different published config and testing the updated image.
+
+        Parameters
+        ----------
+        command:
+            Docker arguments.
+        **kwargs:
+            Subprocess options.
+
+        Returns
+        -------
+        subprocess.CompletedProcess[str]
+            Smoke exit status or successful pull/tag result.
+
+        Raises
+        ------
+        subprocess.CalledProcessError
+            If a checked Docker operation fails.
+        """
+        nonlocal local_config
+        calls.append(command)
+        if command[1] == failure:
+            raise subprocess.CalledProcessError(1, command)
+        if command[1] == "tag":
+            assert command == ["docker", "tag", immutable, reference]
+            local_config = "sha256:" + "c" * 64
+        if command[1] == "run" and reference in command:
+            assert local_config == "sha256:" + "c" * 64
+            return subprocess.CompletedProcess(command, 1 if failure == "smoke" else 0)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(subprocess, "run", docker)
+    monkeypatch.setattr(
+        subprocess, "check_output", lambda *args, **kwargs: local_config
+    )
+    monkeypatch.setattr(
+        "image_kit.cli.image_config_digest", lambda *args: "sha256:" + "c" * 64
+    )
+    common = [
+        "--plan",
+        str(path),
+        "--owner",
+        "example",
+        "--revision",
+        "a" * 40,
+        "--build-id",
+        "123-2",
+        "--platform",
+        "linux/arm64",
+        "--metadata",
+        str(metadata),
+    ]
+    prefix = ["--root", str(consumer.root)]
+    if failure is None:
+        with pytest.raises(RepositoryError, match="differs from the tested"):
+            run(
+                [
+                    *prefix,
+                    "collect",
+                    *common,
+                    "--output",
+                    str(consumer.root / "out.json"),
+                ]
+            )
+        assert run([*prefix, "test", *common]) == 0
+        assert (
+            run(
+                [
+                    *prefix,
+                    "collect",
+                    *common,
+                    "--output",
+                    str(consumer.root / "out.json"),
+                ]
+            )
+            == 0
+        )
+    else:
+        with pytest.raises((RepositoryError, subprocess.CalledProcessError)):
+            run([*prefix, "test", *common])
+        assert not (consumer.root / "out.json").exists()
+    if failure == "metadata":
+        assert calls == []
+    else:
+        assert calls[0] == ["docker", "pull", "--platform", "linux/arm64", immutable]
+        assert not any(
+            command[1] == "pull" and "/base@" in command[-1] for command in calls
+        )
+    if failure in ("pull", "tag"):
+        assert not any(command[1] == "run" for command in calls)
+
+
 def test_worker_commands_build_test_and_collect_only_the_assigned_component(
     consumer: ImageRepository, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -662,6 +791,10 @@ def test_worker_commands_build_test_and_collect_only_the_assigned_component(
     monkeypatch.setattr(
         subprocess, "check_output", lambda *args, **kwargs: "sha256:" + "b" * 64
     )
+    calls.clear()
+    assert run([*prefix, "test", *common, "--metadata", str(metadata)]) == 0
+    assert [command[1] for command in calls] == ["pull", "tag", "run"]
+    assert calls[0][-1] == "ghcr.io/example/other@sha256:" + "d" * 64
     output = consumer.root / "digests.json"
     assert (
         run(

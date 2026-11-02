@@ -30,7 +30,10 @@ formal releases promote verified publication receipts without rebuilding. See th
 Native CI workers are derived per dependency component and platform. Pass the generated
 `--component` to worker commands and use `worker_id` in artifact names. Digest collection
 reads the published native manifest from the registry and compares its config digest with
-the loaded smoke-test image before final tags can advance.
+the loaded smoke-test image before final tags can advance. After export, run `test --metadata`
+with the Bake metadata file to pull selected images by immutable digest and repeat smoke tests.
+This tests the actual export even when publication re-solves installation layers; unpublished
+ancestors retain their local build images. Additional image layers may need downloading.
 
 ## Install and run
 

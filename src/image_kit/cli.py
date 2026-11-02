@@ -77,6 +77,8 @@ def parser() -> argparse.ArgumentParser:
             command.add_argument("--output", type=Path)
         if name == "build-test":
             command.add_argument("--bake", required=True, type=Path)
+        if name == "test":
+            command.add_argument("--metadata", type=Path)
         if name == "collect":
             command.add_argument("--metadata", required=True, type=Path)
             command.add_argument("--output", required=True, type=Path)
@@ -262,6 +264,42 @@ def _verify_tested_images(
             )
 
 
+def _load_published_images(plan: Mapping[str, Any], args: argparse.Namespace) -> None:
+    """Load immutable published images under their native smoke-test references.
+
+    Parameters
+    ----------
+    plan:
+        Validated worker plan, including unpublished build ancestors.
+    args:
+        Native build identity and file-loaded publication metadata.
+
+    Raises
+    ------
+    RepositoryError
+        If publication metadata or the build identity is invalid.
+    subprocess.CalledProcessError
+        If pulling or tagging an image fails.
+
+    Notes
+    -----
+    Validate all selected digests before Docker operations. Unpublished ancestors
+    retain their locally built images. Smoke tests must succeed before collection.
+    """
+    identity = BuildIdentity(
+        args.registry, args.owner, args.repository or "", args.revision, args.build_id
+    )
+    artifact = collect(plan, load_json(args.metadata), identity, args.platform)
+    suffix = release_suffix(args.revision, args.build_id)
+    for record in artifact["digests"]:
+        reference = identity.image(record["name"], f"{record['variant']}-{suffix}")
+        immutable = f"{reference.rsplit(':', 1)[0]}@{record['digest']}"
+        subprocess.run(
+            ["docker", "pull", "--platform", args.platform, immutable], check=True
+        )
+        subprocess.run(["docker", "tag", immutable, reference], check=True)
+
+
 def run(arguments: Sequence[str] | None = None) -> int:
     """Execute one command using the shared repository model.
 
@@ -354,14 +392,13 @@ def run(arguments: Sequence[str] | None = None) -> int:
                 args.output,
             )
         elif args.command == "test":
-            _run_tests(
-                repo,
-                args,
-                {
-                    **plan,
-                    "targets": repo.worker_targets(plan, args.platform, args.component),
-                },
-            )
+            plan = {
+                **plan,
+                "targets": repo.worker_targets(plan, args.platform, args.component),
+            }
+            if args.metadata is not None:
+                _load_published_images(plan, args)
+            _run_tests(repo, args, plan)
         elif args.command == "build-test":
             _build_test(repo, args, plan)
         else:

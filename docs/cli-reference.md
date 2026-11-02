@@ -12,7 +12,7 @@ or Bake rendering.
 | `files --kind shell` | List referenced scripts and configured shell inputs. |
 | `plan` | Select `--all`, `--family <YAML-name>`, `--target <name/variant>`, or both `--base` and `--head`. Optional `--platform`, `--output`, `--github-output`. |
 | `bake` | Require plan, owner, full revision, native platform and mode `load` or `publish`. Optional source repository, registry, build ID, output and `--github-cache`. |
-| `test` | Require plan, owner, revision and platform; build ID must match the loaded images. |
+| `test` | Require plan, owner, revision and platform; build ID must match the loaded images. Optional `--metadata` pulls selected immutable exported images before smoke tests. |
 | `build-test` | Same identity options plus `--bake`; validate the generated Bake file, build/test independent components and aggregate failures. |
 | `collect` | Require plan, owner, revision, build ID, platform, metadata file and output file. Source repository and registry default to consumer settings. |
 | `merge` | Require plan, owner, revision, build ID, digest directory, Git ref and output receipt. Optional `--dry-run`. |
@@ -64,6 +64,15 @@ share a final manifest index; public tags do not add architecture suffixes. Regi
 across multiple tags are sequential, not transactional. Pin a final index digest for fixed use.
 
 ## Artifacts and promotion
+
+After digest export, run `test --metadata <Bake-metadata-file>` with the same plan, worker and
+build identity. All selected digests are validated before Docker operations; each selected
+image is pulled with the native platform and tagged under its local smoke-test reference.
+Unpublished ancestors keep their locally built images. The worker's smoke tests then run again
+against these images. Any pull, tag, container or required assertion failure must stop the
+workflow before `collect`. This may download layers and consume extra disk space, but avoids
+relying on a second Bake solve to reproduce the first tested image. PRs omit this option and
+continue testing locally built images without registry access.
 
 Before collection, the CLI reads the immutable `containerimage.digest` from Bake metadata,
 resolves the unique runnable platform manifest in the registry index, and reads its

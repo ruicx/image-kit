@@ -100,5 +100,8 @@ Derive native workers from dependency components and platforms; retain the full 
 for merge, pass `--component` to worker commands and qualify artifacts with `worker_id` and
 run attempt. Resolve published configs from immutable registry manifests, excluding attestations
 and requiring the expected platform; do not require optional Buildx config-digest metadata.
+After export, `test --metadata` pulls selected images by immutable digest and repeats smoke
+tests before collection. Unpublished ancestors retain their local build references. Keep the
+config-digest comparison in `collect`; a second Bake solve may produce different content.
 
 Use the shared v2 plan and derived native worker matrix. Validate/build/test before digest publication; merge checks all required workers and the full identity before updating tags. Formal versions promote a verified main receipt without rebuilding or creating Git tags. Keep component publication before consumer pin commits. Docs are English-only; README pairs remain bilingual.
