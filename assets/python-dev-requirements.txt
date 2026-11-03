@@ -1,8 +1,10 @@
 # Keep the common development toolset aligned across CUDA and Ascend images.
 setuptools
+setuptools-scm
 hatchling
 hatch-vcs
 editables
+uv_build
 pandas
 numpy
 ipython
