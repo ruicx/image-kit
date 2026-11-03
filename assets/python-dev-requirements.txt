@@ -5,6 +5,8 @@ hatchling
 hatch-vcs
 editables
 uv_build
+wheel
+packaging
 pandas
 numpy
 ipython

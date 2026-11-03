@@ -98,10 +98,11 @@ explicit approval and bilingual documentation in each consuming image family.
 ## Python development packages
 
 `assets/python-dev-requirements.txt` is the common container development toolset.
-It explicitly includes setuptools, setuptools-scm, Hatchling, hatch-vcs, editables
-and uv_build for Python packaging and editable installs. The standalone uv_build
-package also supports build frontends other than the uv executable.
+It explicitly includes setuptools, setuptools-scm, Hatchling, hatch-vcs, editables,
+uv_build, wheel and packaging for Python packaging and editable installs. The
+standalone uv_build package also supports build frontends other than the uv executable.
 Its `uv-build` executable must be on PATH, as it is in an activated environment.
+The `build` package supplies the `python -m build` distribution-build frontend.
 CUDA and Ascend install the same list through separate installers; Ascend retains
 the preinstalled vendor package constraints. These are container packages, not
 dependencies of the image-kit CLI. Offline source installs need a prepared build

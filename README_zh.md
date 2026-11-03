@@ -89,9 +89,10 @@ RUN /tmp/scripts/cmake.sh --version "${CMAKE_VERSION}" --sha256 "${CMAKE_SHA256}
 ## Python 开发包
 
 `assets/python-dev-requirements.txt` 提供容器共用的开发工具集，包含用于 Python 打包和
-editable 安装的 setuptools、setuptools-scm、Hatchling、hatch-vcs、editables 和
-uv_build，均显式列入清单。独立的 uv_build 包也支持 uv 命令以外的构建前端。
+editable 安装的 setuptools、setuptools-scm、Hatchling、hatch-vcs、editables、
+uv_build、wheel 和 packaging，均显式列入清单。独立的 uv_build 包也支持 uv 命令以外的构建前端。
 其 `uv-build` 可执行文件需要位于 PATH 中，激活对应环境即可提供该路径。
+`build` 包提供用于构建分发包的 `python -m build` 前端。
 CUDA 与昇腾通过不同安装器使用同一清单，昇腾保留
 预装厂商包的约束。这些是容器依赖，不是 image-kit CLI 的依赖。离线源码安装需要预先
 准备构建环境并使用 `--no-build-isolation`；普通隔离构建会自行解析构建依赖。
