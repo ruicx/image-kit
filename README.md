@@ -95,6 +95,17 @@ base images, accounts, SSH modes, mirrors, and capability order explicitly. Cred
 runtime-mounted secrets. Rolling developer-shell tools and any checksum exceptions require
 explicit approval and bilingual documentation in each consuming image family.
 
+## Python development packages
+
+`assets/python-dev-requirements.txt` is the common container development toolset.
+It includes setuptools, Hatchling, hatch-vcs and editables for Python packaging and
+editable installs. hatch-vcs brings its setuptools-scm dependency through pip.
+CUDA and Ascend install the same list through separate installers; Ascend retains
+the preinstalled vendor package constraints. These are container packages, not
+dependencies of the image-kit CLI. Offline source installs need a prepared build
+environment and `--no-build-isolation`; ordinary isolated builds resolve their own
+build dependencies.
+
 ## Verification
 
 After syncing development dependencies, install the Git hook in this repository and optionally check every file:

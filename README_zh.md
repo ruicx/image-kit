@@ -86,6 +86,14 @@ RUN /tmp/scripts/cmake.sh --version "${CMAKE_VERSION}" --sha256 "${CMAKE_SHA256}
 执行顺序。凭据通过运行时秘密文件挂载。滚动开发 shell 工具及任何 checksum 例外均需在每个
 消费镜像族中获得明确批准，并记录在双语文档中。
 
+## Python 开发包
+
+`assets/python-dev-requirements.txt` 提供容器共用的开发工具集，包含用于 Python 打包和
+editable 安装的 setuptools、Hatchling、hatch-vcs 和 editables。hatch-vcs 的
+setuptools-scm 依赖由 pip 一并安装。CUDA 与昇腾通过不同安装器使用同一清单，昇腾保留
+预装厂商包的约束。这些是容器依赖，不是 image-kit CLI 的依赖。离线源码安装需要预先
+准备构建环境并使用 `--no-build-isolation`；普通隔离构建会自行解析构建依赖。
+
 ## 验证
 
 同步开发依赖后，在当前仓库安装 Git 提交检查，并可手动检查全部文件：
