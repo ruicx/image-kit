@@ -6,6 +6,7 @@ REPOSITORY_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 scripts=(
     "scripts/dev/cmake.sh|--version"
+    "scripts/dev/micromamba.sh|--version"
     "scripts/libraries/cpptrace.sh|--version"
     "scripts/dev/devshell.sh|--enabled"
     "scripts/system/finalize-mirror.sh|--mirror"
@@ -70,6 +71,9 @@ expect_usage_error "${system_script}" --upgrade sometimes
 expect_usage_error "${REPOSITORY_ROOT}/scripts/dev/cmake.sh" --sha256
 expect_usage_error "${REPOSITORY_ROOT}/scripts/dev/cmake.sh" --sha256 invalid
 expect_usage_error "${REPOSITORY_ROOT}/scripts/dev/cmake.sh" --sha256 ''
+micromamba_script="${REPOSITORY_ROOT}/scripts/dev/micromamba.sh"
+expect_usage_error "${micromamba_script}" --version latest
+expect_usage_error "${micromamba_script}" --version 2.10.0-0 --sha256-amd64 invalid --sha256-arm64 invalid
 expect_usage_error "${REPOSITORY_ROOT}/scripts/python/python-install.sh" --mode unsupported
 for script_name in cuda-pip-packages.sh ascend-pip-packages.sh; do
     script="${REPOSITORY_ROOT}/scripts/python/${script_name}"

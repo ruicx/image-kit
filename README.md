@@ -95,6 +95,15 @@ base images, accounts, SSH modes, mirrors, and capability order explicitly. Cred
 runtime-mounted secrets. Rolling developer-shell tools and any checksum exceptions require
 explicit approval and bilingual documentation in each consuming image family.
 
+### Micromamba
+
+`scripts/dev/micromamba.sh` installs the official Linux binary to `/usr/local/bin`.
+Pass the full release tag with `--version` and its pinned `--sha256-amd64` or
+`--sha256-arm64`. Pass both checksums when building for both architectures.
+The script runs as root and verifies the selected binary before installation.
+Environment creation and shell activation are managed by each container user.
+[Upstream releases](https://github.com/mamba-org/micromamba-releases/releases)
+
 ## Python development packages
 
 `assets/python-dev-requirements.txt` is the common container development toolset.

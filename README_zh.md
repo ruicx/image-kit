@@ -86,6 +86,13 @@ RUN /tmp/scripts/cmake.sh --version "${CMAKE_VERSION}" --sha256 "${CMAKE_SHA256}
 执行顺序。凭据通过运行时秘密文件挂载。滚动开发 shell 工具及任何 checksum 例外均需在每个
 消费镜像族中获得明确批准，并记录在双语文档中。
 
+### Micromamba
+
+`scripts/dev/micromamba.sh` 将官方 Linux 二进制安装到 `/usr/local/bin`。
+用 `--version` 指定完整发布标签，并用 `--sha256-amd64` 或 `--sha256-arm64` 固定对应架构的校验值。构建双架构镜像时传入两个校验值。
+脚本以 root 运行，并在安装前校验选中的二进制。环境创建与 shell 激活由容器内的各个用户管理。
+[上游发布](https://github.com/mamba-org/micromamba-releases/releases)
+
 ## Python 开发包
 
 `assets/python-dev-requirements.txt` 提供容器共用的开发工具集，包含用于 Python 打包和
