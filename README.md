@@ -160,4 +160,6 @@ followed by a colon and summary; the body is a numbered list after a blank line.
 
 ## System capability options
 
+The ROS 2 installer uses a fixed `ros2-apt-source` release and checks the package's SHA-256 for the base distribution before installing it.
+
 `system.sh --timezone <zone> --upgrade <true|false>` configures the OS. Upgrading defaults to `false`; consumers opt in explicitly. Case-insensitive `true`/`false` values are accepted. `dev-tools.sh` includes `gosu` and `sudo` as shared user-switching and privilege tools; Landscape tools remain a consumer choice.

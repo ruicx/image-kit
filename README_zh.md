@@ -144,4 +144,6 @@ Agent 与维护者请先阅读 [AGENTS.md](AGENTS.md)，了解组件职责、uv/
 
 ## 系统能力参数
 
+ROS 2 安装脚本固定 `ros2-apt-source` 发布版本，并在安装前校验对应基础发行版软件包的 SHA-256。
+
 `system.sh --timezone <zone> --upgrade <true|false>` 配置系统，升级默认为 `false`，由消费仓库显式启用。`true`/`false` 不区分大小写。`dev-tools.sh` 提供通用用户切换及权限工具 `gosu` 和 `sudo`；Landscape 工具由消费仓库自行选择。
