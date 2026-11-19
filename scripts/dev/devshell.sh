@@ -302,8 +302,39 @@ starship preset catppuccin-powerline -o "${HOME}/.config/starship.toml"
 
 # ─── Sheldon ──────────────────────────────────────────────────────────────────
 
-curl --proto '=https' -fLsS https://rossmacarthur.github.io/install/crate.sh |
-    bash -s -- --repo rossmacarthur/sheldon --to "${HOME}/.local/bin"
+# These installers otherwise query the rate-limited GitHub releases API.
+SHELDON_VERSION=0.8.5
+ZOXIDE_VERSION=0.10.0
+WITR_VERSION=0.3.4
+case "$ARCH" in
+    x86_64)
+        SHELDON_SHA256=80aa0be617072c278d67fd6c5fbce4903d3801d78b6abf8f058f0648d2242c78
+        ZOXIDE_SHA256=2d93385b99f3e82cf2701609a1bffcad863fbeb75aa3fe7eb6be4d29be68b1ae
+        WITR_ARCH=amd64
+        WITR_SHA256=d99098c61002f9b8a5337977d527dbe8ee29453f2a62c531038ea2749ea738eb
+        ;;
+    aarch64)
+        SHELDON_SHA256=1f6b792e49e259f7c313e9921c8d4ad638d827abc2c023efe0588a55678f9a3e
+        ZOXIDE_SHA256=f1f16c5d6298d63dee467eedea1cdcd8490e43e493bea43acd416dc9033ef641
+        WITR_ARCH=arm64
+        WITR_SHA256=ecd737fcca418026514ed45a6ad06ecc2e02997e1b75ed6e7100ac8cc69eee54
+        ;;
+esac
+SHELL_TOOLS_TMP=$(mktemp -d)
+trap 'rm -rf -- "${SHELL_TOOLS_TMP}"' EXIT
+
+download_release() {
+    local url="$1" sha256="$2" target="$3"
+    curl --fail --silent --show-error --location --retry 3 --proto '=https' --tlsv1.2 \
+        --output "$target" "$url"
+    printf '%s  %s\n' "$sha256" "$target" | sha256sum --check -
+}
+
+download_release \
+    "https://github.com/rossmacarthur/sheldon/releases/download/${SHELDON_VERSION}/sheldon-${SHELDON_VERSION}-${ARCH}-unknown-linux-musl.tar.gz" \
+    "${SHELDON_SHA256}" "${SHELL_TOOLS_TMP}/sheldon.tar.gz"
+tar -xzf "${SHELL_TOOLS_TMP}/sheldon.tar.gz" -C "${SHELL_TOOLS_TMP}" sheldon
+install -Dm0755 "${SHELL_TOOLS_TMP}/sheldon" "${HOME}/.local/bin/sheldon"
 
 echo y | "${HOME}/.local/bin/sheldon" init --shell zsh
 
@@ -325,7 +356,13 @@ echo y | "${HOME}/.local/bin/sheldon" init --shell zsh
 
 # ─── Zoxide ───────────────────────────────────────────────────────────────────
 
-curl -sSfL https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh | sh
+download_release \
+    "https://github.com/ajeetdsouza/zoxide/releases/download/v${ZOXIDE_VERSION}/zoxide-${ZOXIDE_VERSION}-${ARCH}-unknown-linux-musl.tar.gz" \
+    "${ZOXIDE_SHA256}" "${SHELL_TOOLS_TMP}/zoxide.tar.gz"
+tar -xzf "${SHELL_TOOLS_TMP}/zoxide.tar.gz" -C "${SHELL_TOOLS_TMP}" zoxide man/man1
+install -Dm0755 "${SHELL_TOOLS_TMP}/zoxide" "${HOME}/.local/bin/zoxide"
+install -d "${HOME}/.local/share/man/man1"
+install -m 0644 "${SHELL_TOOLS_TMP}/man/man1/"*.1 "${HOME}/.local/share/man/man1/"
 
 cat >>"${HOME}/.zshrc" <<'ZOXIDE_EOF'
 # zoxide initialization
@@ -335,7 +372,13 @@ ZOXIDE_EOF
 
 # ─── Witr ─────────────────────────────────────────────────────────────────────
 
-curl -fsSL https://raw.githubusercontent.com/pranshuparmar/witr/main/install.sh | bash
+WITR_RELEASE="https://github.com/pranshuparmar/witr/releases/download/v${WITR_VERSION}"
+download_release "${WITR_RELEASE}/witr-linux-${WITR_ARCH}" \
+    "${WITR_SHA256}" "${SHELL_TOOLS_TMP}/witr"
+download_release "${WITR_RELEASE}/witr.1" \
+    1aedbe58bbf041c9cf2db195a700a96b1f678228b24366be90b669e9246e8ef4 "${SHELL_TOOLS_TMP}/witr.1"
+run_as_root install -Dm0755 "${SHELL_TOOLS_TMP}/witr" /usr/local/bin/witr
+run_as_root install -Dm0644 "${SHELL_TOOLS_TMP}/witr.1" /usr/local/share/man/man1/witr.1
 
 # ─── Apt Cache Clean ──────────────────────────────────────────────────────────
 
